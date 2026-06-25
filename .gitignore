@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+node_modules/
+dist/
+.pnpm-store/
+
+backend/storage/original/*
+!backend/storage/original/.gitkeep
+
+backend/data/*
+!backend/data/.gitkeep
