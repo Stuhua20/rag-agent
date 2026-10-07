@@ -11,11 +11,18 @@ class EnvService:
     def __init__(self) -> None:
         self.env_path = settings.backend_dir / ".env"
 
-    def configured_flags(self) -> dict[str, bool]:
+    def secret_values(self) -> dict[str, str]:
         values = self._read_env()
         return {
-            "embedding_api_key_configured": bool(values.get("EMBEDDING_API_KEY") or settings.embedding_api_key),
-            "llm_api_key_configured": bool(values.get("LLM_API_KEY") or settings.llm_api_key),
+            "embedding_api_key": values.get("EMBEDDING_API_KEY", "") or settings.embedding_api_key,
+            "llm_api_key": values.get("LLM_API_KEY", "") or settings.llm_api_key,
+        }
+
+    def configured_flags(self) -> dict[str, bool]:
+        secrets = self.secret_values()
+        return {
+            "embedding_api_key_configured": bool(secrets["embedding_api_key"]),
+            "llm_api_key_configured": bool(secrets["llm_api_key"]),
         }
 
     def update_secrets(self, secrets: dict) -> None:

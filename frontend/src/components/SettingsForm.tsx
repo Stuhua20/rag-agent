@@ -1,17 +1,48 @@
 import { FormEvent, useEffect, useState } from "react";
-import { fetchSettings, saveSettings } from "../api/settings";
+import { fetchSecretSettings, fetchSettings, saveSettings } from "../api/settings";
 import type { AppSettings } from "../types/settings";
+
+type SecretName = "embedding" | "llm";
 
 export default function SettingsForm() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [embeddingApiKey, setEmbeddingApiKey] = useState("");
   const [llmApiKey, setLlmApiKey] = useState("");
   const [status, setStatus] = useState("");
-  const [showSecrets, setShowSecrets] = useState(false);
+  const [visibleSecrets, setVisibleSecrets] = useState<Record<SecretName, boolean>>({
+    embedding: false,
+    llm: false,
+  });
+  const [secretValuesLoaded, setSecretValuesLoaded] = useState(false);
+  const [loadingSecret, setLoadingSecret] = useState<SecretName | null>(null);
 
   useEffect(() => {
     fetchSettings().then(setSettings).catch((error) => setStatus(error.message));
   }, []);
+
+  async function toggleSecretVisibility(secretName: SecretName) {
+    if (visibleSecrets[secretName]) {
+      setVisibleSecrets((current) => ({ ...current, [secretName]: false }));
+      return;
+    }
+
+    if (!secretValuesLoaded) {
+      setLoadingSecret(secretName);
+      try {
+        const secrets = await fetchSecretSettings();
+        setEmbeddingApiKey((current) => current || secrets.embedding_api_key);
+        setLlmApiKey((current) => current || secrets.llm_api_key);
+        setSecretValuesLoaded(true);
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "读取 API Key 失败");
+        return;
+      } finally {
+        setLoadingSecret(null);
+      }
+    }
+
+    setVisibleSecrets((current) => ({ ...current, [secretName]: true }));
+  }
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -26,7 +57,7 @@ export default function SettingsForm() {
         },
       } as AppSettings & { secrets: Record<string, string | boolean | undefined> });
       setSettings(saved);
-      setShowSecrets(false);
+      setVisibleSecrets({ embedding: false, llm: false });
       setStatus("设置已保存");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "保存失败");
@@ -81,22 +112,23 @@ export default function SettingsForm() {
             <span>API Key</span>
             <div className="secret-field">
               <input
-                type={showSecrets ? "text" : "password"}
+                type={visibleSecrets.embedding ? "text" : "password"}
                 value={embeddingApiKey}
                 onChange={(event) => setEmbeddingApiKey(event.target.value)}
-                placeholder={settings.secrets?.embedding_api_key_configured ? "已配置，留空则不修改" : "请输入 Embedding API Key"}
+                placeholder={settings.secrets?.embedding_api_key_configured ? "已配置，点击显示查看" : "请输入 Embedding API Key"}
               />
               <button
                 type="button"
                 className="secret-toggle"
-                onClick={() => setShowSecrets((value) => !value)}
+                onClick={() => void toggleSecretVisibility("embedding")}
+                disabled={loadingSecret === "embedding"}
               >
-                {showSecrets ? "隐藏" : "显示"}
+                {loadingSecret === "embedding" ? "读取中..." : visibleSecrets.embedding ? "隐藏" : "显示"}
               </button>
             </div>
             <small className="field-hint">
               {settings.secrets?.embedding_api_key_configured
-                ? "已配置；留空保存表示保持不变，刷新页面后不会回显"
+                ? "已配置；默认隐藏，点击“显示”查看，留空保存表示保持不变"
                 : "调用 Embedding 服务所需的密钥，仅在当前页面保留，刷新后不会回显"}
             </small>
           </label>
@@ -150,22 +182,23 @@ export default function SettingsForm() {
             <span>API Key</span>
             <div className="secret-field">
               <input
-                type={showSecrets ? "text" : "password"}
+                type={visibleSecrets.llm ? "text" : "password"}
                 value={llmApiKey}
                 onChange={(event) => setLlmApiKey(event.target.value)}
-                placeholder={settings.secrets?.llm_api_key_configured ? "已配置，留空则不修改" : "请输入 LLM API Key"}
+                placeholder={settings.secrets?.llm_api_key_configured ? "已配置，点击显示查看" : "请输入 LLM API Key"}
               />
               <button
                 type="button"
                 className="secret-toggle"
-                onClick={() => setShowSecrets((value) => !value)}
+                onClick={() => void toggleSecretVisibility("llm")}
+                disabled={loadingSecret === "llm"}
               >
-                {showSecrets ? "隐藏" : "显示"}
+                {loadingSecret === "llm" ? "读取中..." : visibleSecrets.llm ? "隐藏" : "显示"}
               </button>
             </div>
             <small className="field-hint">
               {settings.secrets?.llm_api_key_configured
-                ? "已配置；留空保存表示保持不变，刷新页面后不会回显"
+                ? "已配置；默认隐藏，点击“显示”查看，留空保存表示保持不变"
                 : "调用 LLM 服务所需的密钥，仅在当前页面保留，刷新后不会回显"}
             </small>
           </label>

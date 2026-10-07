@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
 from app.schemas.settings import SettingsPayload
 from app.services.env_service import env_service
@@ -14,6 +14,12 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 def get_settings() -> dict:
     settings_payload = json_store.read_json("settings.json")
     return {**_merge_defaults(settings_payload), "secrets": env_service.configured_flags()}
+
+
+@router.get("/secrets")
+def get_secret_settings(response: Response) -> dict[str, str]:
+    response.headers["Cache-Control"] = "no-store"
+    return env_service.secret_values()
 
 
 @router.put("")
