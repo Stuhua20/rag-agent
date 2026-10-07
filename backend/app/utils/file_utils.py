@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-SUPPORTED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+SUPPORTED_EXTENSIONS = {".xlsx", ".csv", ".docx", ".pdf"}
 
 
 def get_file_extension(filename: str) -> str:
@@ -14,4 +14,3 @@ def ensure_supported_file(filename: str) -> str:
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(f"Unsupported file type '{extension}'. Supported types: {supported}")
     return extension.lstrip(".")
-

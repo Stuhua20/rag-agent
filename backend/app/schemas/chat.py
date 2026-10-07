@@ -14,3 +14,4 @@ class ChatResponse(BaseModel):
     conversation_id: str
     answer: str
     sources: list[dict[str, Any]]
+    quality: dict[str, Any]

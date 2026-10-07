@@ -1,7 +1,10 @@
+from copy import deepcopy
+
 from fastapi import APIRouter
 
+from app.schemas.settings import SettingsPayload
 from app.services.env_service import env_service
-from app.services.json_store_service import json_store
+from app.services.json_store_service import DEFAULT_SETTINGS, json_store
 
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -10,12 +13,40 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 @router.get("")
 def get_settings() -> dict:
     settings_payload = json_store.read_json("settings.json")
-    return {**settings_payload, "secrets": env_service.configured_flags()}
+    return {**_merge_defaults(settings_payload), "secrets": env_service.configured_flags()}
 
 
 @router.put("")
-def update_settings(payload: dict) -> dict:
-    secrets = payload.pop("secrets", {})
+def update_settings(payload: SettingsPayload) -> dict:
+    updates = payload.model_dump(exclude_none=True, exclude_unset=True)
+    secrets = updates.pop("secrets", {})
     env_service.update_secrets(secrets)
-    json_store.write_json("settings.json", payload)
-    return {**payload, "secrets": env_service.configured_flags()}
+    current = _merge_defaults(json_store.read_json("settings.json"))
+    merged = _deep_merge(current, updates)
+    json_store.write_json("settings.json", merged)
+    return {**_merge_defaults(merged), "secrets": env_service.configured_flags()}
+
+
+def _merge_defaults(payload: dict) -> dict:
+    merged = deepcopy(DEFAULT_SETTINGS)
+    if not isinstance(payload, dict):
+        return merged
+    for key, value in DEFAULT_SETTINGS.items():
+        if key not in payload:
+            continue
+        overrides = payload[key]
+        if isinstance(value, dict) and isinstance(overrides, dict):
+            merged[key] = {**value, **overrides}
+        else:
+            merged[key] = overrides
+    return merged
+
+
+def _deep_merge(base: dict, updates: dict) -> dict:
+    merged = deepcopy(base)
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged

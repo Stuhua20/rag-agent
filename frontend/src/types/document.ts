@@ -3,8 +3,6 @@ export type DocumentItem = {
   file_name: string;
   original_name: string;
   file_type: string;
-  doc_type: string;
-  department: string;
   permission_level: number;
   status: string;
   sheet_count: number;
@@ -12,6 +10,7 @@ export type DocumentItem = {
   row_count: number;
   column_count: number;
   error_message?: string | null;
+  parse_warnings?: string[];
   created_at: string;
   updated_at: string;
 };
@@ -47,4 +46,3 @@ export type ChunkPage = {
   page: number;
   page_size: number;
 };
-

@@ -15,7 +15,7 @@ class EnvService:
         values = self._read_env()
         return {
             "embedding_api_key_configured": bool(values.get("EMBEDDING_API_KEY") or settings.embedding_api_key),
-            "llm_api_key_configured": bool(values.get("LLM_API_KEY") or os.getenv("LLM_API_KEY", "")),
+            "llm_api_key_configured": bool(values.get("LLM_API_KEY") or settings.llm_api_key),
         }
 
     def update_secrets(self, secrets: dict) -> None:

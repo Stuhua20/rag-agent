@@ -1,4 +1,3 @@
-import shutil
 from pathlib import Path
 
 from fastapi import UploadFile
@@ -8,8 +7,10 @@ from app.services.csv_parser_service import CsvParserService
 from app.services.embedding_service import embedding_service
 from app.services.excel_parser_service import ExcelParserService
 from app.services.json_store_service import json_store
+from app.services.pdf_parser_service import PdfParserService
 from app.services.table_chunker_service import TableChunkerService
 from app.services.table_cleaner_service import TableCleanerService
+from app.services.word_parser_service import WordParserService
 from app.utils.file_utils import ensure_supported_file
 from app.utils.id_utils import new_id
 from app.utils.time_utils import utc_now_iso
@@ -19,6 +20,8 @@ class DocumentPipeline:
     def __init__(self) -> None:
         self.excel_parser = ExcelParserService()
         self.csv_parser = CsvParserService()
+        self.pdf_parser = PdfParserService()
+        self.word_parser = WordParserService()
         self.cleaner = TableCleanerService()
         self.chunker = TableChunkerService()
 
@@ -26,8 +29,6 @@ class DocumentPipeline:
         self,
         upload_file: UploadFile,
         file_name: str | None,
-        doc_type: str,
-        department: str,
         permission_level: int,
     ) -> dict:
         original_name = upload_file.filename or "uploaded_file"
@@ -42,8 +43,6 @@ class DocumentPipeline:
             "file_name": safe_file_name,
             "original_name": original_name,
             "file_type": file_type,
-            "doc_type": doc_type,
-            "department": department,
             "permission_level": permission_level,
             "status": "uploaded",
             "storage_path": str(Path("storage/original") / stored_name),
@@ -51,6 +50,7 @@ class DocumentPipeline:
             "chunk_count": 0,
             "row_count": 0,
             "column_count": 0,
+            "parse_warnings": [],
             "error_message": None,
             "created_at": now,
             "updated_at": now,
@@ -58,13 +58,12 @@ class DocumentPipeline:
         json_store.add_item("documents.json", document)
 
         try:
-            settings.storage_dir.mkdir(parents=True, exist_ok=True)
-            with storage_path.open("wb") as output:
-                shutil.copyfileobj(upload_file.file, output)
+            self._copy_upload(upload_file, storage_path)
 
             json_store.update_item("documents.json", document_id, {"status": "parsing", "updated_at": utc_now_iso()})
             parsed = self._parse_file(storage_path, file_type, document_id, safe_file_name)
             cleaned = self.cleaner.clean_workbook(parsed)
+            parse_warnings = parsed.get("warnings", [])
 
             sheet_records = self._create_sheet_records(document_id, cleaned)
             existing_sheets = json_store.list_items("sheets.json")
@@ -90,6 +89,7 @@ class DocumentPipeline:
                 "chunk_count": len(chunks),
                 "row_count": row_count,
                 "column_count": column_count,
+                "parse_warnings": parse_warnings,
                 "updated_at": utc_now_iso(),
             }
             final_document = json_store.update_item("documents.json", document_id, updates)
@@ -100,10 +100,15 @@ class DocumentPipeline:
                 "chunk_count": len(chunks),
             }
         except Exception as error:
+            error_message = str(error)
+            try:
+                self._cleanup_document_artifacts(document_id, storage_path)
+            except Exception as cleanup_error:
+                error_message = f"{error_message}; cleanup failed: {cleanup_error}"
             json_store.update_item(
                 "documents.json",
                 document_id,
-                {"status": "failed", "error_message": str(error), "updated_at": utc_now_iso()},
+                {"status": "failed", "error_message": error_message, "updated_at": utc_now_iso()},
             )
             raise
 
@@ -111,18 +116,12 @@ class DocumentPipeline:
         self,
         keyword: str | None = None,
         status: str | None = None,
-        department: str | None = None,
-        doc_type: str | None = None,
     ) -> list[dict]:
         documents = json_store.list_items("documents.json")
         if keyword:
             documents = [item for item in documents if keyword.lower() in item.get("file_name", "").lower()]
         if status:
             documents = [item for item in documents if item.get("status") == status]
-        if department:
-            documents = [item for item in documents if item.get("department") == department]
-        if doc_type:
-            documents = [item for item in documents if item.get("doc_type") == doc_type]
         return sorted(documents, key=lambda item: item.get("created_at", ""), reverse=True)
 
     def get_document(self, document_id: str) -> dict | None:
@@ -154,7 +153,38 @@ class DocumentPipeline:
     def _parse_file(self, path: Path, file_type: str, document_id: str, file_name: str) -> dict:
         if file_type == "csv":
             return self.csv_parser.parse(path, document_id, file_name)
+        if file_type == "pdf":
+            return self.pdf_parser.parse(path, document_id, file_name)
+        if file_type == "docx":
+            return self.word_parser.parse(path, document_id, file_name)
         return self.excel_parser.parse(path, document_id, file_name)
+
+    def _copy_upload(self, upload_file: UploadFile, storage_path: Path) -> None:
+        max_bytes = settings.max_upload_mb * 1024 * 1024
+        if max_bytes <= 0:
+            raise ValueError("MAX_UPLOAD_MB must be greater than zero.")
+
+        settings.storage_dir.mkdir(parents=True, exist_ok=True)
+        bytes_written = 0
+        with storage_path.open("wb") as output:
+            while True:
+                chunk = upload_file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_bytes:
+                    raise ValueError(f"Uploaded file exceeds the {settings.max_upload_mb} MB limit.")
+                output.write(chunk)
+
+    def _cleanup_document_artifacts(self, document_id: str, storage_path: Path) -> None:
+        for file_name in ("sheets.json", "chunks.json", "embeddings.json"):
+            items = [
+                item
+                for item in json_store.list_items(file_name)
+                if item.get("document_id") != document_id
+            ]
+            json_store.write_json(file_name, items)
+        storage_path.unlink(missing_ok=True)
 
     def _create_sheet_records(self, document_id: str, workbook: dict) -> list[dict]:
         records = []
@@ -167,6 +197,7 @@ class DocumentPipeline:
                     "sheet_index": sheet["sheet_index"],
                     "header_row": sheet["header_row"],
                     "headers": sheet["headers"],
+                    "content_type": sheet.get("content_type", workbook.get("content_type", "table")),
                     "row_count": len(sheet.get("rows", [])),
                     "column_count": len(sheet.get("headers", [])),
                     "created_at": utc_now_iso(),
@@ -176,6 +207,15 @@ class DocumentPipeline:
 
     def _create_embeddings(self, chunks: list[dict]) -> list[dict]:
         vectors = embedding_service.embed_batch([chunk["content"] for chunk in chunks])
+        if len(vectors) != len(chunks):
+            raise ValueError(
+                f"Embedding response count mismatch: expected {len(chunks)}, received {len(vectors)}."
+            )
+
+        dimensions = {len(vector) for vector in vectors}
+        if any(dimension == 0 for dimension in dimensions) or len(dimensions) > 1:
+            raise ValueError("Embedding response contains empty or inconsistent vector dimensions.")
+
         model = embedding_service.embedding_model()
         now = utc_now_iso()
         return [
@@ -188,7 +228,7 @@ class DocumentPipeline:
                 "metadata": chunk.get("metadata", {}),
                 "created_at": now,
             }
-            for chunk, vector in zip(chunks, vectors, strict=False)
+            for chunk, vector in zip(chunks, vectors)
         ]
 
 

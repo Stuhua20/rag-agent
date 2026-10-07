@@ -22,6 +22,7 @@ DEFAULT_SETTINGS = {
         "base_url": "https://api.example.com/v1",
         "model": "text-embedding-3-small",
         "mock": True,
+        "normalize": True,
     },
     "llm": {
         "provider": "openai-compatible",
@@ -34,6 +35,12 @@ DEFAULT_SETTINGS = {
         "chunk_size": settings.default_chunk_size,
         "overlap": settings.default_overlap,
         "score_threshold": settings.default_score_threshold,
+        "search_mode": "hybrid",
+        "max_chunks_per_doc": 3,
+        "full_scan_max_chunks": settings.full_scan_max_chunks,
+    },
+    "conversation": {
+        "context_window": 8,
     },
 }
 
@@ -106,4 +113,3 @@ class JsonStoreService:
 
 
 json_store = JsonStoreService()
-

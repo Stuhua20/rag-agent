@@ -24,6 +24,7 @@ class Settings:
         self.default_top_k = int(os.getenv("DEFAULT_TOP_K", "5"))
         self.default_score_threshold = float(os.getenv("DEFAULT_SCORE_THRESHOLD", "0.2"))
         self.default_permission_level = int(os.getenv("DEFAULT_PERMISSION_LEVEL", "1"))
+        self.full_scan_max_chunks = int(os.getenv("FULL_SCAN_MAX_CHUNKS", "200"))
         self.embedding_provider = os.getenv("EMBEDDING_PROVIDER", "openai-compatible")
         self.embedding_base_url = os.getenv("EMBEDDING_BASE_URL", "https://api.example.com/v1")
         self.embedding_api_key = os.getenv("EMBEDDING_API_KEY", "")

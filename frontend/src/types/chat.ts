@@ -2,6 +2,9 @@ export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  sources?: SourceItem[];
+  quality?: Record<string, unknown>;
+  created_at?: string;
 };
 
 export type SourceItem = {
@@ -13,6 +16,7 @@ export type SourceItem = {
   row_start: number;
   row_end: number;
   score: number;
+  score_type?: "similarity" | "exact_match";
   content: string;
 };
 
@@ -21,10 +25,4 @@ export type ChatRequest = {
   question: string;
   top_k?: number;
   filters?: Record<string, string | number>;
-};
-
-export type ChatResponse = {
-  conversation_id: string;
-  answer: string;
-  sources: SourceItem[];
 };

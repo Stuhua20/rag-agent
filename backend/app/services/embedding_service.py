@@ -6,6 +6,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.json_store_service import json_store
+from app.utils.config_utils import as_bool
 
 
 class EmbeddingService:
@@ -13,13 +14,19 @@ class EmbeddingService:
         config = self._get_config()
         if config["mock"]:
             return self._mock_embedding(text, config["dim"])
-        return self._api_embedding(text, config)
+        vector = self._api_embedding(text, config)
+        if config["normalize"]:
+            return self._normalize_vector(vector)
+        return vector
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         config = self._get_config()
         if config["mock"]:
             return [self._mock_embedding(text, config["dim"]) for text in texts]
-        return self._api_embedding_batch(texts, config)
+        vectors = self._api_embedding_batch(texts, config)
+        if config["normalize"]:
+            return [self._normalize_vector(v) for v in vectors]
+        return vectors
 
     def embedding_model(self) -> str:
         return self._get_config()["model"]
@@ -32,9 +39,19 @@ class EmbeddingService:
             "base_url": embedding_settings.get("base_url", settings.embedding_base_url).rstrip("/"),
             "api_key": settings.embedding_api_key,
             "model": embedding_settings.get("model", settings.embedding_model),
-            "mock": bool(embedding_settings.get("mock", settings.embedding_mock)),
+            "mock": as_bool(embedding_settings.get("mock"), settings.embedding_mock),
             "dim": settings.embedding_dim,
+            "normalize": as_bool(embedding_settings.get("normalize"), True),
         }
+
+    def _normalize_vector(self, vector: list[float]) -> list[float]:
+        """\u5c06\u5411\u91cf\u5f52\u4e00\u5316\u5230\u5355\u4f4d\u957f\u5ea6"""
+        if not vector:
+            return vector
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm == 0:
+            return vector
+        return [round(value / norm, 8) for value in vector]
 
     def _mock_embedding(self, text: str, dim: int) -> list[float]:
         vector = [0.0] * dim
@@ -47,6 +64,7 @@ class EmbeddingService:
             index = int.from_bytes(digest[:4], "big") % dim
             vector[index] += 1.0
 
+        # Mock embedding \u59cb\u7ec8\u5f52\u4e00\u5316
         norm = math.sqrt(sum(value * value for value in vector))
         if norm == 0:
             return vector
@@ -70,6 +88,21 @@ class EmbeddingService:
             raise ValueError("EMBEDDING_API_KEY is required when EMBEDDING_MOCK=false.")
         if config["provider"] != "openai-compatible":
             raise ValueError(f"Unsupported embedding provider: {config['provider']}")
+
+        is_dashscope = "dashscope" in config["base_url"] or "maas.aliyuncs.com" in config["base_url"]
+        if is_dashscope:
+            results = []
+            for text in texts:
+                response = httpx.post(
+                    f"{config['base_url']}/embeddings",
+                    headers={"Authorization": f"Bearer {config['api_key']}"},
+                    json={"model": config["model"], "input": text},
+                    timeout=60,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                results.append(payload["data"][0]["embedding"])
+            return results
 
         response = httpx.post(
             f"{config['base_url']}/embeddings",

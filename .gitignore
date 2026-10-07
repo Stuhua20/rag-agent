@@ -4,9 +4,21 @@ __pycache__/
 .venv/
 venv/
 .env
+.env.*
+!.env.example
 node_modules/
 dist/
 .pnpm-store/
+
+# Local assistant/tooling settings
+.claude/settings.local.json
+
+# Cloudflare Tunnel runtime state
+.cloudflare-tunnel/quick.log
+.cloudflare-tunnel/quick.pid
+.cloudflare-tunnel/quick-url.txt
+.cloudflare-tunnel/quick-local-url.txt
+.cloudflare-tunnel/cloudflared-empty.yml
 
 backend/storage/original/*
 !backend/storage/original/.gitkeep
