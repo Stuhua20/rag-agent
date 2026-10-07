@@ -110,6 +110,9 @@ class RetrievalService:
             ),
         }
 
+    def top_k(self) -> int:
+        return self._get_config()["top_k"]
+
     def full_scan_max_chunks(self) -> int:
         return self._get_config()["full_scan_max_chunks"]
 

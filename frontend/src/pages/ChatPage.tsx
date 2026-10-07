@@ -91,7 +91,7 @@ export default function ChatPage() {
 
     try {
       await sendChatMessageStream(
-        { conversation_id: conversationId, question, top_k: 5 },
+        { conversation_id: conversationId, question },
         {
           onSources(convId, sources) {
             setConversationId(convId);

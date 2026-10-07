@@ -49,6 +49,22 @@ def check_defaults_and_validation() -> None:
     assert payload.retrieval.search_mode == "keyword"
 
 
+def check_top_k_setting_wiring() -> None:
+    original_data_dir = json_store.data_dir
+    try:
+        with tempfile.TemporaryDirectory(prefix="p0-top-k-") as temp_dir:
+            json_store.data_dir = Path(temp_dir)
+            json_store.initialize()
+            saved_settings = json_store.read_json("settings.json")
+            saved_settings["retrieval"]["top_k"] = 9
+            json_store.write_json("settings.json", saved_settings)
+
+            assert retrieval_service.top_k() == 9
+            assert chat_service._determine_top_k("unknown", None) == 9
+    finally:
+        json_store.data_dir = original_data_dir
+
+
 def check_query_routing() -> None:
     lookup_plan = {"intent": "lookup", "retrieval": {"need_full_scan": False}}
     assert not query_understanding_service.needs_full_scan("销售额是多少", lookup_plan)
@@ -370,6 +386,7 @@ def check_chat_service_wiring() -> None:
 
 def main() -> None:
     check_defaults_and_validation()
+    check_top_k_setting_wiring()
     check_query_routing()
     check_query_expansion()
     check_bilingual_query_expansion()

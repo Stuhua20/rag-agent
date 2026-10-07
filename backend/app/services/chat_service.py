@@ -3,7 +3,6 @@ from collections.abc import Generator
 from functools import lru_cache
 from pathlib import Path
 
-from app.core.config import settings
 from app.services.answer_quality_service import answer_quality_service
 from app.services.conversation_context_service import conversation_context_service
 from app.services.json_store_service import json_store
@@ -191,7 +190,7 @@ class ChatService:
 
     def _determine_top_k(self, intent: str, default_top_k: int | None) -> int:
         """根据意图动态确定检索数量"""
-        base = default_top_k or settings.default_top_k
+        base = default_top_k if default_top_k is not None else retrieval_service.top_k()
 
         # 复杂问题需要更多结果
         if intent == "ranking":
