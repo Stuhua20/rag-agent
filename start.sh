@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 REQUIREMENTS_FILE="$BACKEND_DIR/requirements.txt"
+ENV_FILE="$BACKEND_DIR/.env"
+ENV_EXAMPLE_FILE="$BACKEND_DIR/.env.example"
 BUNDLED_RUNTIME="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies"
 
 BACKEND_PID=""
@@ -13,6 +15,23 @@ FRONTEND_PID=""
 fail() {
   printf '[ERROR] %s\n' "$1" >&2
   exit 1
+}
+
+ensure_env_file() {
+  if [[ -f "$ENV_FILE" ]]; then
+    return
+  fi
+
+  if [[ -e "$ENV_FILE" ]]; then
+    fail "环境变量路径存在但不是文件：$ENV_FILE"
+  fi
+
+  if [[ ! -f "$ENV_EXAMPLE_FILE" ]]; then
+    fail "未找到环境变量模板：$ENV_EXAMPLE_FILE"
+  fi
+
+  cp "$ENV_EXAMPLE_FILE" "$ENV_FILE" || fail "创建环境变量文件失败：$ENV_FILE"
+  printf '[INFO] 未发现 backend/.env，已从模板创建。\n'
 }
 
 cleanup() {
@@ -105,6 +124,8 @@ if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
   printf '[INFO] 未发现前端依赖，正在安装...\n'
   (cd "$FRONTEND_DIR" && "${PNPM[@]}" install --frozen-lockfile) || fail "前端依赖安装失败。"
 fi
+
+ensure_env_file
 
 printf '\n[INFO] 后端：http://127.0.0.1:8000\n'
 printf '[INFO] 前端：http://127.0.0.1:5173\n'

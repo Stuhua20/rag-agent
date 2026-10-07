@@ -7,6 +7,8 @@ title Distributor-RAG Startup
 set "ROOT_DIR=%~dp0"
 set "VENV_DIR=%ROOT_DIR%.venv"
 set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
+set "ENV_FILE=%ROOT_DIR%backend\.env"
+set "ENV_EXAMPLE_FILE=%ROOT_DIR%backend\.env.example"
 set "PYTHON_CMD="
 
 echo ========================================
@@ -71,6 +73,26 @@ if errorlevel 1 (
     echo [ERROR] 后端依赖安装失败，请检查网络连接或 pip 配置。
     pause
     exit /b 1
+)
+
+if exist "%ENV_FILE%\NUL" (
+    echo [ERROR] 环境变量路径存在但不是文件：%ENV_FILE%
+    pause
+    exit /b 1
+)
+if not exist "%ENV_FILE%" (
+    if not exist "%ENV_EXAMPLE_FILE%" (
+        echo [ERROR] 未找到环境变量模板：%ENV_EXAMPLE_FILE%
+        pause
+        exit /b 1
+    )
+    copy /Y "%ENV_EXAMPLE_FILE%" "%ENV_FILE%" >nul
+    if errorlevel 1 (
+        echo [ERROR] 创建环境变量文件失败：%ENV_FILE%
+        pause
+        exit /b 1
+    )
+    echo [INFO] 未发现 %ENV_FILE%，已从模板创建。
 )
 
 echo [INFO] 正在启动后端：http://127.0.0.1:8000
