@@ -19,7 +19,10 @@ MANAGED_PROMPT_SET = frozenset(MANAGED_PROMPTS)
 REQUIRED_PLACEHOLDERS = {
     "query/planner.md": ("{conversation_context}", "{metadata}", "{question}"),
     "query/translator.md": ("{target_language}", "{queries}"),
-    "rag/answer.md": ("{conversation_context}", "{query_plan}", "{context}", "{question}"),
+    "rag/answer.md": (
+        "{conversation_context}", "{query_plan}", "{resolved_question}",
+        "{evidence_report}", "{context}", "{question}",
+    ),
 }
 
 router = APIRouter(prefix="/api/prompts", tags=["prompts"])

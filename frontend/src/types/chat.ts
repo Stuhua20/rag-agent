@@ -1,3 +1,5 @@
+import type { DocumentScope } from "./conversation";
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -5,6 +7,8 @@ export type ChatMessage = {
   sources?: SourceItem[];
   quality?: Record<string, unknown>;
   created_at?: string;
+  document_scope?: DocumentScope;
+  scope_revision?: number;
 };
 
 export type SourceItem = {
@@ -25,4 +29,5 @@ export type ChatRequest = {
   question: string;
   top_k?: number;
   filters?: Record<string, string | number>;
+  expected_scope_revision?: number;
 };

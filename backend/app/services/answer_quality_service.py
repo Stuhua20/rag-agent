@@ -152,9 +152,12 @@ class AnswerQualityService:
         sources: list[dict],
         *,
         deterministic: bool = False,
+        original_question: str | None = None,
     ) -> dict:
         verified_answer = str(answer or "").strip()
         issues = []
+        # A model-resolved question describes scope; it must not authorize new facts.
+        user_question = question if original_question is None else original_question
 
         for pattern in INTERNAL_REFERENCE_PATTERNS:
             if pattern.search(verified_answer):
@@ -196,7 +199,7 @@ class AnswerQualityService:
                 }
             )
 
-        unknown_entities = self._unknown_entities(verified_answer, question, sources)
+        unknown_entities = self._unknown_entities(verified_answer, user_question, sources)
         if unknown_entities:
             issues.append(
                 {
@@ -209,7 +212,7 @@ class AnswerQualityService:
 
         unsupported_numbers = []
         if not deterministic and sources:
-            question_numbers = self._numbers_in_text(question)
+            question_numbers = self._numbers_in_text(user_question)
             supported_numbers = set(question_numbers)
             evidence_rows = []
             for source in sources:

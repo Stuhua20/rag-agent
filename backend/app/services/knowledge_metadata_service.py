@@ -2,8 +2,12 @@ from app.services.json_store_service import json_store
 
 
 class KnowledgeMetadataService:
-    def snapshot(self, question: str = "") -> dict:
-        documents = [item for item in json_store.list_items("documents.json") if item.get("status") == "indexed"]
+    def snapshot(self, question: str = "", document_ids: list[str] | None = None) -> dict:
+        allowed_ids = set(document_ids) if document_ids is not None else None
+        documents = [
+            item for item in json_store.list_items("documents.json")
+            if item.get("status") == "indexed" and (allowed_ids is None or item.get("id") in allowed_ids)
+        ]
         document_ids = {item.get("id") for item in documents}
         sheets = [item for item in json_store.list_items("sheets.json") if item.get("document_id") in document_ids]
         chunks = [item for item in json_store.list_items("chunks.json") if item.get("document_id") in document_ids]

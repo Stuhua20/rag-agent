@@ -36,7 +36,6 @@ async def main() -> None:
             upload_result = await document_pipeline.upload_and_parse(
                 upload,
                 sample_path.name,
-                1,
             )
         document_id = upload_result["document_id"]
         assert upload_result["status"] == "indexed", upload_result
@@ -48,7 +47,6 @@ async def main() -> None:
             json={
                 "question": "上海甲公司的销售额是多少？",
                 "top_k": 3,
-                "filters": {"permission_level": 1},
             },
         )
         response.raise_for_status()
@@ -63,7 +61,6 @@ async def main() -> None:
             json={
                 "question": "火星基地库存是多少？",
                 "top_k": 3,
-                "filters": {"permission_level": 1},
             },
         )
         no_source_response.raise_for_status()

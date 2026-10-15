@@ -1,0 +1,50 @@
+.chat-composer {
+  min-width: 0;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+}
+.chat-composer .message-input { border-top: 0; padding-top: 10px; }
+.document-scope-bar { padding: 12px 24px 0; font-size: 13px; color: var(--color-text-secondary); }
+.scope-bar-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.scope-bar-row strong { color: var(--color-text); font-weight: 500; }
+.scope-secondary { background: var(--color-bg-secondary); color: var(--color-text); border: 1px solid var(--color-border); padding: 6px 12px; font-size: 13px; white-space: nowrap; }
+.scope-secondary:hover { background: var(--color-border); }
+.scope-hint { color: var(--color-text-secondary); font-size: 12px; margin: 8px 0 0; }
+.scope-error { color: var(--color-error); font-size: 13px; overflow-wrap: anywhere; }
+.scope-history-marker { align-self: center; color: var(--color-text-secondary); font-size: 12px; text-align: center; padding: 4px 12px; }
+.document-scope-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0; border: 1px solid var(--color-border); border-radius: var(--radius-lg); color: var(--color-text); background: var(--color-surface); box-shadow: var(--shadow-xl); }
+.document-scope-dialog::backdrop { background: rgba(24, 24, 27, 0.4); }
+.document-scope-shell { display: flex; flex-direction: column; gap: 16px; padding: 24px; min-height: 0; }
+.document-scope-shell header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.document-scope-shell h2 { margin: 0; font-size: 18px; }
+.document-scope-shell header p { margin: 6px 0 0; color: var(--color-text-secondary); font-size: 13px; }
+.scope-modes { display: flex; gap: 20px; border: 0; margin: 0; padding: 0; }
+.scope-modes label { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 14px; }
+.document-scope-dialog input[type="radio"], .document-scope-dialog input[type="checkbox"] { appearance: auto; -webkit-appearance: auto; width: 16px; height: 16px; flex-shrink: 0; margin: 0; padding: 0; accent-color: var(--color-primary); }
+.document-scope-dialog input[type="checkbox"] { border-radius: 3px; }
+.document-scope-dialog input[type="checkbox"]::before { display: none; }
+.scope-search { width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 9px 12px; background: var(--color-bg); }
+.scope-selection { display: grid; gap: 12px; min-height: 0; }
+.scope-selection-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scope-selection-actions span { margin-left: auto; color: var(--color-text-secondary); font-size: 12px; }
+.scope-file-list { overflow: auto; max-height: min(360px, 40dvh); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.scope-file { display: flex; gap: 12px; align-items: center; padding: 12px; cursor: pointer; }
+.scope-file + .scope-file { border-top: 1px solid var(--color-border); }
+.scope-file:hover { background: var(--color-bg); }
+.scope-file.unavailable { color: var(--color-text-secondary); cursor: default; }
+.scope-file-info { display: grid; flex: 1; gap: 3px; min-width: 0; }
+.scope-file-info strong { font-weight: 500; overflow-wrap: anywhere; }
+.scope-file-info small { font-size: 12px; color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.scope-file-status { font-size: 12px; color: var(--color-text-secondary); white-space: nowrap; }
+.scope-all-description, .scope-empty { color: var(--color-text-secondary); font-size: 14px; padding: 16px 12px; margin: 0; }
+.document-scope-shell footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--color-border); padding-top: 16px; }
+.document-scope-shell footer span { margin-right: auto; color: var(--color-text-secondary); font-size: 12px; }
+.scope-modes legend { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 600px) {
+  .document-scope-bar { padding: 10px 16px 0; }
+  .document-scope-shell { padding: 18px; gap: 14px; }
+  .document-scope-shell footer { flex-wrap: wrap; }
+  .document-scope-shell footer span { flex-basis: 100%; }
+  .scope-modes { gap: 14px; flex-wrap: wrap; }
+  .scope-file { gap: 8px; }
+}

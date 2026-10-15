@@ -2,8 +2,8 @@ export type DocumentItem = {
   id: string;
   file_name: string;
   original_name: string;
+  source_relative_path?: string | null;
   file_type: string;
-  permission_level: number;
   status: string;
   sheet_count: number;
   chunk_count: number;

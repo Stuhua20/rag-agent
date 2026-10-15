@@ -1,9 +1,7 @@
-export default function TopBar() {
+export default function TopBar({ title = "知识库检索工具" }: { title?: string }) {
   return (
     <header className="topbar">
-      <div>
-        <strong>知识库demo</strong>
-      </div>
+      <strong className="topbar-title" title={title}>{title}</strong>
     </header>
   );
 }

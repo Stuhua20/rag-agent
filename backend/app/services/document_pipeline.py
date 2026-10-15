@@ -11,7 +11,7 @@ from app.services.pdf_parser_service import PdfParserService
 from app.services.table_chunker_service import TableChunkerService
 from app.services.table_cleaner_service import TableCleanerService
 from app.services.word_parser_service import WordParserService
-from app.utils.file_utils import ensure_supported_file
+from app.utils.file_utils import ensure_supported_file, validate_source_relative_path
 from app.utils.id_utils import new_id
 from app.utils.time_utils import utc_now_iso
 
@@ -29,10 +29,11 @@ class DocumentPipeline:
         self,
         upload_file: UploadFile,
         file_name: str | None,
-        permission_level: int,
+        source_relative_path: str | None = None,
     ) -> dict:
         original_name = upload_file.filename or "uploaded_file"
         file_type = ensure_supported_file(original_name)
+        source_relative_path = validate_source_relative_path(source_relative_path)
         document_id = new_id("doc")
         safe_file_name = file_name.strip() if file_name and file_name.strip() else original_name
         stored_name = f"{document_id}.{file_type}"
@@ -42,8 +43,8 @@ class DocumentPipeline:
             "id": document_id,
             "file_name": safe_file_name,
             "original_name": original_name,
+            "source_relative_path": source_relative_path,
             "file_type": file_type,
-            "permission_level": permission_level,
             "status": "uploaded",
             "storage_path": str(Path("storage/original") / stored_name),
             "sheet_count": 0,
@@ -141,13 +142,13 @@ class DocumentPipeline:
         document = self.get_document(document_id)
         if not document:
             return False
+        storage_path = settings.storage_dir / Path(document.get("storage_path", "")).name
+        if storage_path.exists() and storage_path.is_file():
+            storage_path.unlink()
         for file_name in ("sheets.json", "chunks.json", "embeddings.json"):
             items = [item for item in json_store.list_items(file_name) if item.get("document_id") != document_id]
             json_store.write_json(file_name, items)
         json_store.delete_item("documents.json", document_id)
-        storage_path = settings.backend_dir / document.get("storage_path", "")
-        if storage_path.exists() and storage_path.is_file():
-            storage_path.unlink()
         return True
 
     def _parse_file(self, path: Path, file_type: str, document_id: str, file_name: str) -> dict:

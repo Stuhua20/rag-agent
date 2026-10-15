@@ -16,6 +16,16 @@ LIST_FILES = {
     "messages.json",
 }
 
+FILE_DIRECTORIES = {
+    "documents.json": "knowledge",
+    "sheets.json": "knowledge",
+    "chunks.json": "knowledge",
+    "embeddings.json": "knowledge",
+    "conversations.json": "conversations",
+    "messages.json": "conversations",
+    "settings.json": "config",
+}
+
 DEFAULT_SETTINGS = {
     "embedding": {
         "provider": "openai-compatible",
@@ -48,10 +58,11 @@ DEFAULT_SETTINGS = {
 class JsonStoreService:
     def __init__(self) -> None:
         self.data_dir = settings.data_dir
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def initialize(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_files()
         settings.storage_dir.mkdir(parents=True, exist_ok=True)
         for file_name in LIST_FILES:
             path = self._path(file_name)
@@ -69,8 +80,8 @@ class JsonStoreService:
             return json.load(file)
 
     def write_json(self, file_name: str, data: Any) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
         path = self._path(file_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = path.with_suffix(path.suffix + ".tmp")
         with self._lock:
             with temp_path.open("w", encoding="utf-8") as file:
@@ -86,30 +97,60 @@ class JsonStoreService:
         return next((item for item in self.list_items(file_name) if item.get("id") == item_id), None)
 
     def add_item(self, file_name: str, item: dict) -> dict:
-        items = self.list_items(file_name)
-        items.append(item)
-        self.write_json(file_name, items)
-        return item
+        with self._lock:
+            items = self.list_items(file_name)
+            items.append(item)
+            self.write_json(file_name, items)
+            return item
 
-    def update_item(self, file_name: str, item_id: str, updates: dict) -> dict | None:
-        items = self.list_items(file_name)
-        for index, item in enumerate(items):
-            if item.get("id") == item_id:
-                items[index] = {**item, **updates}
-                self.write_json(file_name, items)
-                return items[index]
-        return None
+    def update_item(
+        self, file_name: str, item_id: str, updates: dict, *, expected: dict | None = None,
+    ) -> dict | None:
+        with self._lock:
+            items = self.list_items(file_name)
+            for index, item in enumerate(items):
+                if item.get("id") == item_id:
+                    if expected and any(item.get(key) != value for key, value in expected.items()):
+                        return None
+                    items[index] = {**item, **updates}
+                    self.write_json(file_name, items)
+                    return items[index]
+            return None
 
     def delete_item(self, file_name: str, item_id: str) -> bool:
-        items = self.list_items(file_name)
-        next_items = [item for item in items if item.get("id") != item_id]
-        if len(next_items) == len(items):
-            return False
-        self.write_json(file_name, next_items)
-        return True
+        with self._lock:
+            items = self.list_items(file_name)
+            next_items = [item for item in items if item.get("id") != item_id]
+            if len(next_items) == len(items):
+                return False
+            self.write_json(file_name, next_items)
+            return True
 
     def _path(self, file_name: str) -> Path:
-        return self.data_dir / file_name
+        directory = FILE_DIRECTORIES.get(file_name)
+        return self.data_dir / directory / file_name if directory else self.data_dir / file_name
+
+    def _migrate_legacy_files(self) -> None:
+        # Check every destination before moving anything or initializing defaults.
+        # Both copies may contain different data; never choose one silently.
+        with self._lock:
+            legacy_files = [
+                (self.data_dir / file_name, self._path(file_name))
+                for file_name in FILE_DIRECTORIES
+                if (self.data_dir / file_name).exists()
+            ]
+            for source, target in legacy_files:
+                if target.exists():
+                    raise FileExistsError(
+                        f"JSON migration conflict: both {source} and {target} exist. "
+                        "Back up and resolve the duplicate files before starting the application."
+                    )
+            for source, target in legacy_files:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                # A hard link preserves bytes and refuses to overwrite a target
+                # created after the preflight check. Both paths are on the same disk.
+                target.hardlink_to(source)
+                source.unlink()
 
 
 json_store = JsonStoreService()

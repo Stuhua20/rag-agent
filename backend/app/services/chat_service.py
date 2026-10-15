@@ -1,6 +1,10 @@
 import json
 from collections.abc import Generator
 from functools import lru_cache
+
+from fastapi import HTTPException
+
+from app.schemas.conversation import DocumentScope
 from pathlib import Path
 
 from app.services.answer_quality_service import answer_quality_service
@@ -30,19 +34,34 @@ class ChatService:
         conversation_id: str | None = None,
         top_k: int | None = None,
         filters: dict | None = None,
+        expected_scope_revision: int | None = None,
+        _conversation: dict | None = None,
     ) -> dict:
         question = question.strip()
-        conversation = self._get_or_create_conversation(conversation_id, question)
-        conversation_context = conversation_context_service.build_context(self.list_messages(conversation["id"]))
-        self._add_message(conversation["id"], "user", question, [])
+        conversation = _conversation or self.prepare_conversation(conversation_id, question, expected_scope_revision)
+        scope = conversation.get("document_scope", {"mode": "all", "document_ids": []})
+        filters = {key: value for key, value in (filters or {}).items() if key != "document_ids"}
+        if scope["mode"] == "selected":
+            filters["document_ids"] = scope["document_ids"]
+        conversation_context = conversation_context_service.build_context(
+            self.list_messages(conversation["id"]), scope_revision=conversation.get("scope_revision", 0),
+        )
+        self._add_message(conversation["id"], "user", question, [], scope_context=conversation)
 
-        metadata = knowledge_metadata_service.snapshot(question)
-        query_plan = query_understanding_service.plan(question, conversation_context, metadata, filters)
+        metadata = (
+            knowledge_metadata_service.snapshot(question, document_ids=scope["document_ids"])
+            if scope["mode"] == "selected" else knowledge_metadata_service.snapshot(question)
+        )
+        query_plan = {**query_understanding_service.plan(question, conversation_context, metadata, filters),
+                      "document_scope": scope}
+        if query_plan.get("needs_clarification"):
+            return self._clarification_response(conversation, question, query_plan)
+        resolved_question = query_plan.get("resolved_question") or question
         sources, deterministic_answer, retrieval_state = self._prepare_retrieval(
-            question, query_plan, top_k, filters
+            resolved_question, query_plan, top_k, filters
         )
         evidence_report = answer_quality_service.evaluate_evidence(
-            question, query_plan, sources, retrieval_state
+            resolved_question, query_plan, sources, retrieval_state
         )
         evidence_fallback = evidence_report.pop("fallback_answer")
 
@@ -51,20 +70,23 @@ class ChatService:
                 deterministic_answer
                 if deterministic_answer is not None
                 else llm_service.generate_answer(
-                    self._build_prompt(question, sources, query_plan, conversation_context),
+                    self._build_prompt(
+                        question, sources, query_plan, conversation_context, evidence_report=evidence_report,
+                    ),
                     system_prompt=_load_prompt("system/base.md"),
                 )
             )
             verification = answer_quality_service.verify_answer(
                 draft_answer,
-                question,
+                resolved_question,
                 sources,
                 deterministic=deterministic_answer is not None,
+                original_question=question,
             )
             answer = verification.pop("answer")
             verifier_report = verification
         else:
-            answer = _load_prompt("rag/no_source.md") if not sources else evidence_fallback
+            answer = self._no_source_answer(conversation) if not sources else evidence_fallback
             verifier_report = {
                 "passed": None,
                 "skipped": True,
@@ -72,8 +94,12 @@ class ChatService:
                 "issues": [],
             }
 
-        quality = {"evidence_gate": evidence_report, "answer_verifier": verifier_report}
-        self._add_message(conversation["id"], "assistant", answer, sources, quality)
+        quality = {
+            "query_understanding": self._question_trace(question, query_plan),
+            "evidence_gate": evidence_report,
+            "answer_verifier": verifier_report,
+        }
+        self._add_message(conversation["id"], "assistant", answer, sources, quality, scope_context=conversation)
         self._touch_conversation(conversation["id"])
 
         return {"conversation_id": conversation["id"], "answer": answer, "sources": sources, "quality": quality}
@@ -84,16 +110,37 @@ class ChatService:
         conversation_id: str | None = None,
         top_k: int | None = None,
         filters: dict | None = None,
+        expected_scope_revision: int | None = None,
+        _conversation: dict | None = None,
     ) -> Generator[dict, None, None]:
         question = question.strip()
-        conversation = self._get_or_create_conversation(conversation_id, question)
-        conversation_context = conversation_context_service.build_context(self.list_messages(conversation["id"]))
-        self._add_message(conversation["id"], "user", question, [])
+        conversation = _conversation or self.prepare_conversation(conversation_id, question, expected_scope_revision)
+        scope = conversation.get("document_scope", {"mode": "all", "document_ids": []})
+        filters = {key: value for key, value in (filters or {}).items() if key != "document_ids"}
+        if scope["mode"] == "selected":
+            filters["document_ids"] = scope["document_ids"]
+        conversation_context = conversation_context_service.build_context(
+            self.list_messages(conversation["id"]), scope_revision=conversation.get("scope_revision", 0),
+        )
+        self._add_message(conversation["id"], "user", question, [], scope_context=conversation)
 
-        metadata = knowledge_metadata_service.snapshot(question)
-        query_plan = query_understanding_service.plan(question, conversation_context, metadata, filters)
+        metadata = (
+            knowledge_metadata_service.snapshot(question, document_ids=scope["document_ids"])
+            if scope["mode"] == "selected" else knowledge_metadata_service.snapshot(question)
+        )
+        query_plan = {**query_understanding_service.plan(question, conversation_context, metadata, filters),
+                      "document_scope": scope}
+        if query_plan.get("needs_clarification"):
+            result = self._clarification_response(conversation, question, query_plan)
+            yield {"event": "sources", "data": {"conversation_id": conversation["id"], "sources": []}}
+            yield {"event": "delta", "data": {"text": result["answer"]}}
+            yield {"event": "done", "data": {
+                "conversation_id": conversation["id"], "answer": result["answer"], "quality": result["quality"],
+            }}
+            return
+        resolved_question = query_plan.get("resolved_question") or question
         sources, deterministic_answer, retrieval_state = self._prepare_retrieval(
-            question, query_plan, top_k, filters
+            resolved_question, query_plan, top_k, filters
         )
 
         yield {
@@ -102,11 +149,12 @@ class ChatService:
         }
 
         evidence_report = answer_quality_service.evaluate_evidence(
-            question, query_plan, sources, retrieval_state
+            resolved_question, query_plan, sources, retrieval_state
         )
         evidence_fallback = evidence_report.pop("fallback_answer")
+        answer_chunks: list[str] = []
         if not evidence_report["passed"]:
-            answer = _load_prompt("rag/no_source.md") if not sources else evidence_fallback
+            answer = self._no_source_answer(conversation) if not sources else evidence_fallback
             verifier_report = {
                 "passed": None,
                 "skipped": True,
@@ -117,29 +165,63 @@ class ChatService:
             if deterministic_answer is not None:
                 draft_answer = deterministic_answer
             else:
-                prompt = self._build_prompt(question, sources, query_plan, conversation_context)
-                draft_answer = "".join(
-                    llm_service.generate_answer_stream(prompt, system_prompt=_load_prompt("system/base.md"))
+                prompt = self._build_prompt(
+                    question, sources, query_plan, conversation_context, evidence_report=evidence_report,
                 )
+                for text in llm_service.generate_answer_stream(prompt, system_prompt=_load_prompt("system/base.md")):
+                    if text:
+                        answer_chunks.append(text)
+                        yield {"event": "delta", "data": {"text": text}}
+                draft_answer = "".join(answer_chunks)
             verification = answer_quality_service.verify_answer(
                 draft_answer,
-                question,
+                resolved_question,
                 sources,
                 deterministic=deterministic_answer is not None,
+                original_question=question,
             )
             answer = verification.pop("answer")
             verifier_report = verification
 
-        quality = {"evidence_gate": evidence_report, "answer_verifier": verifier_report}
-        yield {"event": "delta", "data": {"text": answer}}
+        quality = {
+            "query_understanding": self._question_trace(question, query_plan),
+            "evidence_gate": evidence_report,
+            "answer_verifier": verifier_report,
+        }
+        # Streamed text is a draft; done.answer below replaces it with the verified result.
+        if not answer_chunks:
+            yield {"event": "delta", "data": {"text": answer}}
 
-        self._add_message(conversation["id"], "assistant", answer, sources, quality)
+        self._add_message(conversation["id"], "assistant", answer, sources, quality, scope_context=conversation)
         self._touch_conversation(conversation["id"])
 
         yield {
             "event": "done",
             "data": {"conversation_id": conversation["id"], "answer": answer, "quality": quality},
         }
+
+    @staticmethod
+    def _question_trace(question: str, query_plan: dict) -> dict:
+        """Persist interpretation separately from the user's message and evidence."""
+        return {
+            "original_question": question,
+            "resolved_question": query_plan.get("resolved_question") or question,
+            "retrieval_queries": query_plan.get("retrieval_queries") or query_plan.get("sub_queries") or [question],
+            "needs_clarification": bool(query_plan.get("needs_clarification", False)),
+            "clarification_question": query_plan.get("clarification_question") or "",
+        }
+
+    def _clarification_response(self, conversation: dict, question: str, query_plan: dict) -> dict:
+        answer = query_plan["clarification_question"]
+        reason = "问题中的指代或省略条件尚未明确，等待用户补充。"
+        quality = {
+            "query_understanding": self._question_trace(question, query_plan),
+            "evidence_gate": {"passed": False, "skipped": True, "reason": reason, "source_count": 0},
+            "answer_verifier": {"passed": None, "skipped": True, "reason": reason, "issues": []},
+        }
+        self._add_message(conversation["id"], "assistant", answer, [], quality, scope_context=conversation)
+        self._touch_conversation(conversation["id"])
+        return {"conversation_id": conversation["id"], "answer": answer, "sources": [], "quality": quality}
 
     def _prepare_retrieval(
         self,
@@ -148,10 +230,15 @@ class ChatService:
         top_k: int | None,
         filters: dict | None,
     ) -> tuple[list[dict], str | None, dict]:
+        question = query_plan.get("resolved_question") or question
         sub_queries = query_plan.get("sub_queries") or [question]
         retrieval_queries = query_plan.get("retrieval_queries") or sub_queries
         intent = query_plan.get("intent", "lookup")
-        merged_filters = query_plan.get("filters") or filters or {}
+        merged_filters = {**(query_plan.get("filters") or filters or {})}
+        # Document scope is enforced by the caller, never by the model's query plan.
+        merged_filters.pop("document_ids", None)
+        if filters is not None and "document_ids" in filters:
+            merged_filters["document_ids"] = filters["document_ids"]
         planned_top_k = query_plan.get("retrieval", {}).get("top_k")
         dynamic_top_k = top_k or planned_top_k or self._determine_top_k(intent, top_k)
 
@@ -163,7 +250,9 @@ class ChatService:
             query_variants=retrieval_queries,
         )
         if analysis:
-            sources = retrieval_service.sources_for_chunk_ids(analysis["chunk_ids"], limit=dynamic_top_k)
+            sources = retrieval_service.sources_for_chunk_ids(
+                analysis["chunk_ids"], limit=dynamic_top_k, document_ids=merged_filters.get("document_ids"),
+            )
             return sources, analysis["answer"], {
                 "full_scan_required": True,
                 "full_scan_complete": True,
@@ -212,15 +301,81 @@ class ChatService:
         conversations = json_store.list_items("conversations.json")
         return sorted(conversations, key=lambda item: item.get("updated_at", ""), reverse=True)
 
-    def create_conversation(self, title: str | None = None) -> dict:
+    def create_conversation(self, title: str | None = None, document_scope: dict | None = None) -> dict:
+        scope = DocumentScope.model_validate(document_scope or {}).model_dump()
+        self._validate_scope_documents(scope)
         now = utc_now_iso()
         conversation = {
             "id": new_id("conv"),
             "title": title or "新对话",
+            "document_scope": scope,
+            "scope_revision": 0,
             "created_at": now,
             "updated_at": now,
         }
         return json_store.add_item("conversations.json", conversation)
+
+    @staticmethod
+    def _invalid_scope_ids(scope: dict) -> list[str]:
+        if scope["mode"] == "all":
+            return []
+        indexed_ids = {
+            item["id"] for item in json_store.list_items("documents.json") if item.get("status") == "indexed"
+        }
+        return [item for item in scope["document_ids"] if item not in indexed_ids]
+
+    def _validate_scope_documents(self, scope: dict) -> None:
+        if self._invalid_scope_ids(scope):
+            raise HTTPException(status_code=409, detail="所选文档已删除或尚未完成入库，请重新选择检索文档。")
+
+    def get_conversation(self, conversation_id: str) -> dict:
+        conversation = json_store.get_item("conversations.json", conversation_id)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="会话不存在。")
+        scope = DocumentScope.model_validate(conversation.get("document_scope") or {}).model_dump()
+        return {**conversation, "document_scope": scope, "scope_revision": conversation.get("scope_revision", 0),
+                "invalid_document_ids": self._invalid_scope_ids(scope)}
+
+    def update_document_scope(self, conversation_id: str, scope: dict, expected_revision: int) -> dict:
+        scope = DocumentScope.model_validate(scope).model_dump()
+        current = self.get_conversation(conversation_id)
+        if current["scope_revision"] != expected_revision:
+            raise HTTPException(status_code=409, detail="会话检索范围已在其他窗口更新，请刷新范围后重试。")
+        self._validate_scope_documents(scope)
+        if current["document_scope"] == scope:
+            return current
+        raw = json_store.get_item("conversations.json", conversation_id)
+        if raw is None or raw.get("scope_revision", 0) != expected_revision:
+            raise HTTPException(status_code=409, detail="会话已更新，请刷新后重试。")
+        updated = json_store.update_item(
+            "conversations.json", conversation_id,
+            {"document_scope": scope, "scope_revision": expected_revision + 1, "updated_at": utc_now_iso()},
+            expected={"scope_revision": raw.get("scope_revision")},
+        )
+        if updated is None:
+            raise HTTPException(status_code=409, detail="会话已更新，请刷新后重试。")
+        return {**updated, "invalid_document_ids": []}
+
+    def rename_conversation(self, conversation_id: str, title: str) -> dict:
+        updated = json_store.update_item("conversations.json", conversation_id, {"title": title})
+        if updated is None:
+            raise HTTPException(status_code=404, detail="会话不存在，可能已被删除。")
+        return updated
+
+    def prepare_conversation(
+        self, conversation_id: str | None, question: str, expected_revision: int | None = None,
+    ) -> dict:
+        conversation = self._get_or_create_conversation(conversation_id, question)
+        if expected_revision is not None and expected_revision != conversation.get("scope_revision", 0):
+            raise HTTPException(status_code=409, detail="会话检索范围已在其他窗口更新，请刷新范围后重试。")
+        self._validate_scope_documents(conversation.get("document_scope", {"mode": "all", "document_ids": []}))
+        return conversation
+
+    @staticmethod
+    def _no_source_answer(conversation: dict) -> str:
+        if conversation.get("document_scope", {}).get("mode") == "selected":
+            return "所选文档中未找到明确依据。"
+        return _load_prompt("rag/no_source.md")
 
     def list_messages(self, conversation_id: str) -> list[dict]:
         return [
@@ -246,6 +401,7 @@ class ChatService:
             conversation = json_store.get_item("conversations.json", conversation_id)
             if conversation:
                 return conversation
+            raise HTTPException(status_code=404, detail="会话不存在，请新建会话。")
         title = question[:30] if question else "新对话"
         return self.create_conversation(title)
 
@@ -256,6 +412,7 @@ class ChatService:
         content: str,
         sources: list[dict],
         quality: dict | None = None,
+        *, scope_context: dict | None = None,
     ) -> dict:
         message = {
             "id": new_id("msg"),
@@ -265,6 +422,9 @@ class ChatService:
             "sources": sources,
             "created_at": utc_now_iso(),
         }
+        if scope_context is not None:
+            message["document_scope"] = scope_context.get("document_scope", {"mode": "all", "document_ids": []})
+            message["scope_revision"] = scope_context.get("scope_revision", 0)
         if quality is not None:
             message["quality"] = quality
         return json_store.add_item("messages.json", message)
@@ -278,12 +438,16 @@ class ChatService:
         sources: list[dict],
         query_plan: dict | None = None,
         conversation_context: str = "无",
+        *,
+        evidence_report: dict | None = None,
     ) -> str:
         context = "\n\n".join(self._format_source(index, source) for index, source in enumerate(sources, start=1))
         template = _load_prompt("rag/answer.md")
         return (
             template.replace("{conversation_context}", conversation_context)
             .replace("{query_plan}", self._format_query_plan(query_plan))
+            .replace("{resolved_question}", (query_plan or {}).get("resolved_question") or question)
+            .replace("{evidence_report}", json.dumps(evidence_report or {}, ensure_ascii=False, indent=2))
             .replace("{context}", context)
             .replace("{question}", question)
         )

@@ -39,10 +39,11 @@ class RetrievalService:
         limit = top_k or config["top_k"]
         threshold = config["score_threshold"]
         max_per_doc = config["max_chunks_per_doc"]
+        allowed_ids = set(filters["document_ids"]) if "document_ids" in filters else None
         indexed_document_ids = {
             document.get("id")
             for document in json_store.list_items("documents.json")
-            if document.get("status") == "indexed"
+            if document.get("status") == "indexed" and (allowed_ids is None or document.get("id") in allowed_ids)
         }
         chunks_by_id = {chunk["id"]: chunk for chunk in json_store.list_items("chunks.json")}
         scored_sources = []
@@ -51,7 +52,7 @@ class RetrievalService:
             if embedding.get("document_id") not in indexed_document_ids:
                 continue
             chunk = chunks_by_id.get(embedding.get("chunk_id"))
-            if not chunk:
+            if not chunk or chunk.get("document_id") not in indexed_document_ids:
                 continue
 
             metadata = {**chunk.get("metadata", {}), **embedding.get("metadata", {})}
@@ -226,12 +227,15 @@ class RetrievalService:
             return 1.0
         return 0.9
 
-    def sources_for_chunk_ids(self, chunk_ids: list[str], limit: int | None = None) -> list[dict]:
+    def sources_for_chunk_ids(
+        self, chunk_ids: list[str], limit: int | None = None, document_ids: list[str] | None = None,
+    ) -> list[dict]:
         """返回确定性分析命中的 chunk，供回答引用。"""
+        allowed_ids = set(document_ids) if document_ids is not None else None
         indexed_document_ids = {
             document.get("id")
             for document in json_store.list_items("documents.json")
-            if document.get("status") == "indexed"
+            if document.get("status") == "indexed" and (allowed_ids is None or document.get("id") in allowed_ids)
         }
         chunks_by_id = {chunk["id"]: chunk for chunk in json_store.list_items("chunks.json")}
         embeddings_by_chunk_id = {
@@ -290,14 +294,6 @@ class RetrievalService:
         return source
 
     def _matches_filters(self, metadata: dict, filters: dict) -> bool:
-        permission_level = filters.get("permission_level")
-        if permission_level is not None:
-            try:
-                if int(metadata.get("permission_level", 1)) > int(permission_level):
-                    return False
-            except (TypeError, ValueError):
-                return False
-
         for key in ("sheet_name",):
             value = filters.get(key)
             if value and metadata.get(key) != value:

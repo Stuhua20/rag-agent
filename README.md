@@ -53,8 +53,9 @@
 - Chat API + mock LLM / OpenAI-compatible Chat API 双支持
 - SSE 流式输出
 - 历史会话上下文（滑动窗口）参与 Query 理解与回答
+- 用户原话与补全问题分离：`question` 用于展示和历史，`resolved_question` 用于检索、表格计算和核验；指代不明时先澄清
 - 检索失败自动降级：Query 理解失败回退规则规划，无检索结果返回固定文案，问答链路不中断
-- 回答卡片下方可展开引用来源（sources）
+- 文档式回答，下方按文件显示来源标签；点击可在右侧证据面板查看原文片段，窄屏使用抽屉（见 [回答展示说明](docs/answer-presentation.md)）
 
 **工程配套**
 
@@ -87,6 +88,9 @@ backend/
   scripts/smoke_test.py       ← 一键冒烟测试
   scripts/p0_self_check.py    ← P0 关键链路自检
   data/                       ← 运行时 JSON 数据（自动初始化）
+    knowledge/                ← 文档、分区、分块和向量
+    conversations/            ← 会话和消息
+    config/                   ← 运行时设置
   storage/original/           ← 上传的原始文件
   requirements.txt
   .env                        ← 环境变量（含 API key，已 gitignore）
@@ -263,12 +267,15 @@ smoke test passed
 ### 4.1 上传文档
 
 1. 启动后端与前端，打开前端页面。
-2. 点击左侧「上传」，选择 `.xlsx`、`.csv`、文字型 `.pdf` 或 `.docx` 文件。
-3. 填写权限等级。
-4. 点击「上传并解析」。
-5. 打开「文件库」，点击文件右侧「查看」，可查看解析出的 sheets 和 chunks。
+2. 在「文件库」点击「上传」，多选 `.xlsx`、`.csv`、文字型 `.pdf` 或 `.docx` 文件，也可选择文件夹批量导入。
+3. 检查清单后点击「开始上传」，查看文件传输和解析入库进度。
+4. 在「文件库」点击文件右侧「查看」，打开文件详情弹窗，在「内容预览」分页查看解析内容，或切换「文件信息」查看来源、状态、时间等信息。
 
 上传成功后，后端会写入 `documents.json` / `sheets.json` / `chunks.json` / `embeddings.json`，文档状态变为 `indexed`。
+
+在文件库可直接勾选文件，或全选当前搜索结果；选中后在列表上方点击「删除所选」并确认，即可批量删除，也可「取消选择」。单个文件的删除入口位于行末「更多操作」菜单。改变搜索条件会清空勾选。删除会清理原文件和关联索引；部分失败时保留失败文件及原因，可再次删除重试。
+
+文件详情弹窗的交互及代码结构见 [文件预览说明](docs/file-preview.md)。
 
 ### 4.2 聊天问答
 
@@ -288,10 +295,7 @@ curl -X POST http://127.0.0.1:8000/api/chat \
   -H "Content-Type: application/json" \
   -d '{
     "question": "上海 甲公司 销售额是多少",
-    "top_k": 5,
-    "filters": {
-      "permission_level": 1
-    }
+    "top_k": 5
   }'
 ```
 
@@ -322,8 +326,8 @@ Chat API 会同时把对话写入 `conversations.json` 与 `messages.json`。
 | 页面 | 路径 | 功能 |
 |---|---|---|
 | 聊天 | `/` | 流式问答、引用来源、历史会话管理 |
-| 上传 | `/upload` | 上传 Excel/CSV/PDF/Word，填写权限等级 |
-| 文件库 | `/documents` | 文件列表，查看 sheets / chunks，删除文件 |
+| 上传 | `/upload` | 多文件及文件夹上传，查看处理进度 |
+| 文件库 | `/documents` | 文件列表、详情弹窗与解析内容分页、批量删除 |
 | 提示词 | `/prompts` | 在线查看与编辑 `prompts/` 下的运行时 Prompt |
 | 设置 | `/settings` | 模型配置、检索参数、API key 配置状态 |
 
@@ -331,9 +335,9 @@ Chat API 会同时把对话写入 `conversations.json` 与 `messages.json`。
 
 ## 5. 配置说明
 
-配置分两层：**环境变量**（`backend/.env`，存敏感信息如 API key）和 **运行时设置**（`backend/data/settings.json`，可从前端设置页修改，不存 API key）。启动时自动初始化默认值。
+配置分两层：**环境变量**（`backend/.env`，存敏感信息如 API key）和 **运行时设置**（`backend/data/config/settings.json`，可从前端设置页修改，不存 API key）。启动时自动初始化默认值。
 
-### 5.1 运行时设置 `backend/data/settings.json`
+### 5.1 运行时设置 `backend/data/config/settings.json`
 
 ```json
 {
@@ -437,7 +441,6 @@ POST /v1/embeddings
 | `DEFAULT_OVERLAP` | `100` | 分块重叠（预留） |
 | `DEFAULT_TOP_K` | `5` | 默认检索条数 |
 | `DEFAULT_SCORE_THRESHOLD` | `0.2` | 默认分数门槛 |
-| `DEFAULT_PERMISSION_LEVEL` | `1` | 默认权限等级 |
 | `EMBEDDING_PROVIDER` | `openai-compatible` | Embedding 提供方 |
 | `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` | 见上文 | Embedding 接口地址与模型 |
 | `EMBEDDING_API_KEY` | 空 | **`EMBEDDING_MOCK=false` 时必填** |
@@ -478,14 +481,21 @@ POST /v1/embeddings
 用户问题
   → 构建历史会话上下文（滑动窗口）
   → 读取知识库动态元数据（文件名、Sheet 名、表头字段）
-  → Query Planner：LLM 输出结构化 Query Plan（意图 / 子查询 / 中英文检索表达 / 过滤条件 / top_k）
+  → Query Planner：保留用户原话，输出补全问题 / 澄清状态 / 意图 / 子查询 / 中英文检索表达 / 过滤条件 / top_k
+  → 指代或省略条件无法确认时返回澄清问题，不执行检索、统计或答案生成
   → 统计类问题优先全量扫描并做确定性计算；无法安全计算时进行受限全量检索
   → 普通问题多路检索：每个子查询分别检索，按分数合并去重和排序
   → 拼 Prompt（system + answer 模板 + 检索资料 + 问题）
   → LLM 流式生成回答，前端同步展示引用来源
 ```
 
-降级策略：Query 理解失败、LLM 返回非 JSON 或当前无可用元数据时，自动回退到基于原始问题的规则规划与检索，不会中断问答链路；完全没有检索结果时直接返回固定文案「知识库中未找到明确依据。」。
+流式接口在证据门禁通过后，将模型生成的每个文本片段通过 `delta` 事件即时发送给前端。生成中的正文是尚未校验的草稿；生成结束后执行答案校验，通过 `done.answer` 返回最终答案，前端替换草稿，历史记录也只保存最终答案。若校验发现无法核验的信息，最终正文会替换为提示文案。确定性计算、证据不足和问题澄清分支直接返回完整结果。
+
+降级策略：Query 理解失败或 LLM 返回非 JSON 时，独立问题回退到基于原始问题的规则规划与检索；可识别的依赖上下文追问（如“那2月份呢？”、“它的销售额呢？”）返回澄清问题，避免丢失对象或时间条件。完全没有检索结果时直接返回固定文案「知识库中未找到明确依据。」。
+
+聊天 API 仍只需提交 `question`，不需要客户端组装完整提示词。用户消息与会话标题保留原话；后台把原话、补全问题、历史、查询规划和知识库证据分别组装给模型。普通及 SSE 响应的 `quality.query_understanding` 会记录 `original_question`、`resolved_question`、`retrieval_queries`、`needs_clarification` 和 `clarification_question`，并随助手消息保存，便于检查问题被如何理解。历史和补全问题都不能代替知识库事实证据。
+
+每个聊天会话可独立选择检索文档，支持全部文档或指定多个文档。选择随会话保存；范围切换后保留历史显示，模型上下文从新范围重新累计。实现、接口及边界说明见 [会话文档范围](docs/conversation-document-scope.md)。
 
 ### 6.3 Query Planner
 
@@ -501,6 +511,9 @@ Query Plan 结构（LLM 输出的 `filters` 会经过白名单校验，只接受
 
 ```json
 {
+  "resolved_question": "用户原话，或结合明确历史补全后的完整问题",
+  "needs_clarification": false,
+  "clarification_question": "",
   "intent": "lookup | summary | comparison | ranking | trend | unknown",
   "sub_queries": ["可直接检索的子问题"],
   "retrieval_queries": ["原始问题或子问题", "英文检索表达（如需要）"],
@@ -515,6 +528,8 @@ Query Plan 结构（LLM 输出的 `filters` 会经过白名单校验，只接受
 ```
 
 这一步不写死业务字段：用户上传新 Excel / CSV / PDF / Word 后，只要文档进入 `indexed` 状态，Query Planner 会自动从最新的 `documents.json`、`sheets.json`、`chunks.json` 中读取可用字段和文档分区信息。检索条数还会按意图动态调整（如 ranking / summary 多取几条，lookup 少取）。
+
+例如，上一轮问“A经销商1月份的销售额合计是多少？”，本轮问“那2月份呢？”，Planner 可输出 `resolved_question: "A经销商2月份的销售额合计是多少？"`。新时间覆盖旧时间，用户历史仍保存“那2月份呢？”。追问没有可用历史或历史存在多个可能指代对象时，应提出澄清；独立完整的问题不需要历史。规划结果缺少新字段时，独立问题保持兼容；上下文补全依赖规划模型，模型不可用时不会宣称已解析追问。
 
 ### 6.4 检索模式
 
@@ -539,17 +554,19 @@ Query Plan 结构（LLM 输出的 `filters` 会经过白名单校验，只接受
 
 ## 7. 数据存储
 
-所有运行时数据位于 `backend/data/`，启动时自动初始化：
+所有运行时 JSON 数据位于 `backend/data/`，按用途分为三类，启动时自动初始化；自定义 `DATA_DIR` 时也使用相同的子目录结构：
 
 | 文件 | 内容 |
 |---|---|
-| `documents.json` | 上传文件基本信息（状态、元数据、行列统计） |
-| `sheets.json` | sheet 名、表头、行列数量等元信息 |
-| `chunks.json` | 文档 chunk（含文件名、分区名、行号、列名和值） |
-| `embeddings.json` | 每个 chunk 对应的向量及模型信息 |
-| `settings.json` | 模型配置与检索参数（不保存 API key） |
-| `conversations.json` | 对话列表 |
-| `messages.json` | 用户与助手消息，及每条助手消息对应的 sources |
+| `knowledge/documents.json` | 上传文件基本信息（状态、元数据、行列统计） |
+| `knowledge/sheets.json` | sheet 名、表头、行列数量等元信息 |
+| `knowledge/chunks.json` | 文档 chunk（含文件名、分区名、行号、列名和值） |
+| `knowledge/embeddings.json` | 每个 chunk 对应的向量及模型信息 |
+| `config/settings.json` | 模型配置与检索参数（不保存 API key） |
+| `conversations/conversations.json` | 对话列表 |
+| `conversations/messages.json` | 用户与助手消息，及每条助手消息对应的 sources |
+
+升级已有数据目录前，先停止后端并备份七个 JSON。首次启动会将旧根目录中的已知文件逐个迁入对应子目录，保留原始字节，不重新生成向量。若旧位置与新位置同时存在同名文件，启动会报错并停止迁移，不覆盖任何一份数据，也不初始化默认值；请备份并核对冲突文件后再启动。迁移中断后可以重新启动继续处理剩余旧文件；若出现同名冲突，则按上述方式处理。业务代码继续使用原有逻辑文件名，由存储层统一映射路径。
 
 写入采用临时文件 + 原子替换（`os.replace`），并以线程锁保护单次写入。
 
@@ -562,7 +579,7 @@ Query Plan 结构（LLM 输出的 `filters` 会经过白名单校验，只接受
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | 健康检查 |
-| POST | `/api/documents/upload` | 上传并解析（form-data：`file`、`file_name`、`permission_level`） |
+| POST | `/api/documents/upload` | 上传并解析（form-data：`file`、`file_name`、可选 `source_relative_path`） |
 | GET | `/api/documents` | 文档列表（支持 `keyword` / `status` 过滤） |
 | GET | `/api/documents/{id}` | 文档详情 |
 | GET | `/api/documents/{id}/sheets` | 文档的 sheet 列表 |
@@ -590,7 +607,6 @@ Query Plan 结构（LLM 输出的 `filters` 会经过白名单校验，只接受
 - Word 当前读取正文段落和表格，并识别标准分栏配置；文本框、浮动对象、图片中的文字和旧版二进制 `.doc` 暂不保证
 - 不做复杂 Excel 公式计算，只读取单元格当前值
 - 合并单元格、复杂多级表头只做基础兼容（以第一个非空行作为表头）
-- 权限等级（`permission_level`）只是检索过滤参数，无认证体系
 - mock LLM 只适合本地链路测试，真实效果需要接入真实 LLM API
 
 ## 10. 后续规划

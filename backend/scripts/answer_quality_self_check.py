@@ -258,8 +258,9 @@ def check_chat_integration() -> None:
     streamed = stream_result["events"]
     deltas = [event["data"]["text"] for event in streamed if event["event"] == "delta"]
     done = next(event["data"] for event in streamed if event["event"] == "done")
-    assert deltas == [done["answer"]]
-    assert "999" not in deltas[0]
+    assert deltas == ["甲公司销售额为", "999元。"]
+    assert "999" not in done["answer"]
+    assert not done["quality"]["answer_verifier"]["passed"]
     assert stream_result["llm_calls"] == ["stream"]
 
 

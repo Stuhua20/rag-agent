@@ -70,7 +70,6 @@ class DocumentParserTests(unittest.TestCase):
                         DocumentPipeline().upload_and_parse(
                             UploadFile(file=file, filename=pdf_path.name),
                             pdf_path.name,
-                            1,
                         )
                     )
                 self.assertEqual(result["status"], "indexed")
@@ -124,7 +123,7 @@ class DocumentParserTests(unittest.TestCase):
         }
         chunks = TableChunkerService().chunk_workbook(
             workbook,
-            {"id": "doc", "file_name": "sample.pdf", "permission_level": 1},
+            {"id": "doc", "file_name": "sample.pdf"},
             {"第1页": "sheet"},
             chunk_size=1000,
             overlap=0,
@@ -149,7 +148,7 @@ class DocumentParserTests(unittest.TestCase):
         }
         chunks = TableChunkerService().chunk_workbook(
             workbook,
-            {"id": "doc", "file_name": "sample.csv", "permission_level": 1},
+            {"id": "doc", "file_name": "sample.csv"},
             {"销售": "sheet"},
             chunk_size=1000,
             overlap=0,

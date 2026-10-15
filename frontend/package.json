@@ -2,7 +2,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:upload": "node --experimental-strip-types --test tests/uploadQueue.test.ts"
   },
   "dependencies": {
     "react": "^19.0.0",

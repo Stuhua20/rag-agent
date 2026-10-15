@@ -1,25 +1,22 @@
-import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "../types/chat";
+import { answerContent, groupSources } from "../utils/answerPresentation";
+import ChatIcon from "./ChatIcon";
 
-export default function AnswerCard({ message }: { message: ChatMessage }) {
-  const sources = message.sources;
-  const hasSources = Array.isArray(sources) && sources.length > 0;
-  const isStreaming = sources === undefined;
-  const content = isStreaming
-    ? message.content
-    : hasSources
-      ? stripCitationText(stripReferenceSection(message.content))
-      : message.content;
-  const [citationsOpen, setCitationsOpen] = useState(false);
+type Props = {
+  message: ChatMessage;
+  activeSourceId?: string;
+  panelId: string;
+  onSelectSource: (chunkId: string, opener: HTMLButtonElement) => void;
+};
+
+export default function AnswerCard({ message, activeSourceId, panelId, onSelectSource }: Props) {
+  const content = answerContent(message);
+  const groups = groupSources(message.sources ?? []);
 
   return (
     <article className="answer-card">
-      <header className="answer-card-header">
-        <span>回答</span>
-        {hasSources && <span>{sources!.length} 条引用</span>}
-      </header>
       <div className="answer-card-body">
         {content ? (
           <ReactMarkdown
@@ -38,66 +35,25 @@ export default function AnswerCard({ message }: { message: ChatMessage }) {
           <span className="typing-indicator"><span>AI 正在思考</span><i /><i /><i /></span>
         )}
       </div>
-      {hasSources && (
-        <section className="answer-citations">
-          <div className="answer-divider" />
-          <button
-            type="button"
-            className="citation-toggle"
-            aria-expanded={citationsOpen}
-            onClick={() => setCitationsOpen((open) => !open)}
-          >
-            <span>引用来源</span>
-            <span>{citationsOpen ? "收起" : `展开 ${sources!.length} 条`}</span>
-          </button>
-          {citationsOpen && (
-            <div className="citation-list">
-              {sources!.map((source, index) => (
-                <details key={source.chunk_id} className="citation-item">
-                  <summary>
-                    <span className="citation-index">[{index + 1}]</span>
-                    <span className="citation-source">
-                      {source.file_name} · {source.sheet_name} · 行 {source.row_start}-{source.row_end}
-                    </span>
-                    <span className="citation-action">查看详情</span>
-                  </summary>
-                  <div className="citation-evidence">
-                    <div>
-                      {source.score_type === "exact_match"
-                        ? "确定性匹配：全量计算命中"
-                        : `相似度：${source.score.toFixed(3)}`}
-                    </div>
-                    <pre>{source.content}</pre>
-                  </div>
-                </details>
-              ))}
-            </div>
-          )}
+      {groups.length > 0 && (
+        <section className="answer-sources" aria-label="回答来源">
+          <span className="answer-sources-label">来源</span>
+          {groups.map((group) => (
+            <button
+              key={group[0].document_id || group[0].file_name}
+              type="button"
+              className="answer-source-chip"
+              aria-pressed={group.some((source) => source.chunk_id === activeSourceId)}
+              aria-controls={activeSourceId ? panelId : undefined}
+              onClick={(event) => onSelectSource(group[0].chunk_id, event.currentTarget)}
+            >
+              <ChatIcon name="file" />
+              <span>{group[0].file_name}</span>
+              {group.length > 1 && <span className="answer-source-count">{group.length} 段</span>}
+            </button>
+          ))}
         </section>
       )}
     </article>
   );
-}
-
-function stripReferenceSection(content: string) {
-  const lines = content.split(/\r?\n/);
-  const referenceStartIndex = lines.findIndex((line) => {
-    const normalized = line.trim().replace(/^#+\s*/, "").replace(/\*\*/g, "");
-    return /^参考来源[:：]?$/.test(normalized);
-  });
-
-  if (referenceStartIndex === -1) {
-    return content;
-  }
-
-  return lines.slice(0, referenceStartIndex).join("\n").trim();
-}
-
-function stripCitationText(content: string) {
-  return content
-    .replace(/[\s　]*[（(]?\s*\[?来源\s*\d+(?:\s*[-—~至,，、]\s*\d+)*\]?\s*[）)]?/g, "")
-    .replace(/([：:；;，,、])\s*([。；;，,、])/g, "$2")
-    .replace(/\s+([。；;，,、])/g, "$1")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
 }

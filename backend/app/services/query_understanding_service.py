@@ -16,6 +16,9 @@ def _load_prompt(file_path: str) -> str:
 
 class QueryUnderstandingService:
     DEFAULT_PLAN = {
+        "resolved_question": "",
+        "needs_clarification": False,
+        "clarification_question": "",
         "intent": "lookup",
         "sub_queries": [],
         "retrieval_queries": [],
@@ -36,10 +39,14 @@ class QueryUnderstandingService:
             prompt = self._build_planner_prompt(question, conversation_context, metadata or {})
             response = llm_service.generate_answer(prompt)
             plan = self._parse_json_object(response)
-            return self._normalize_plan(plan, fallback, metadata or {}, user_filters)
+            return self._normalize_plan(
+                plan, fallback, metadata or {}, user_filters, conversation_context=conversation_context
+            )
         except Exception:
             # 即使查询规划模型不可用，也尝试用轻量翻译扩展保留跨语言召回能力。
-            return self._normalize_plan({}, fallback, metadata or {}, user_filters)
+            return self._normalize_plan(
+                {}, fallback, metadata or {}, user_filters, conversation_context=conversation_context
+            )
 
     def decompose(self, question: str, conversation_context: str = "无") -> list[str]:
         """将问题分解为多个子问题"""
@@ -144,6 +151,10 @@ class QueryUnderstandingService:
         sub_queries = [question] if not self.should_use_query_decomposition(question) else [question]
         intent = self.detect_intent(question)
         return {
+            "original_question": question,
+            "resolved_question": question,
+            "needs_clarification": self._requires_context(question),
+            "clarification_question": "",
             "intent": intent,
             "sub_queries": sub_queries,
             "retrieval_queries": self._unique_queries([question, *sub_queries]),
@@ -151,26 +162,67 @@ class QueryUnderstandingService:
             "retrieval": {"top_k": None, "need_full_scan": False},
         }
 
-    def _normalize_plan(self, plan: dict, fallback: dict, metadata: dict, user_filters: dict | None) -> dict:
-        intent = str(plan.get("intent") or fallback["intent"]).strip()
+    @staticmethod
+    def _requires_context(question: str) -> bool:
+        """Conservative fallback for explicit references when planning cannot resolve them."""
+        return bool(re.search(
+            r"它们?|他们|上述|刚才|之前提到|前面提到|这个|那个|这家|那家|这些|那些|其中|同样条件"
+            r"|^(?:那|那么).{0,30}(?:呢|怎么样|如何)[？?]?$"
+            r"|^(?:\d{4}年)?\d{1,2}月(?:份)?呢[？?]?$"
+            r"|\b(?:it|its|they|their|those|these|same|previous|above)\b|^(?:what|how) about\b",
+            question,
+            flags=re.IGNORECASE,
+        ))
+
+    def _normalize_plan(
+        self,
+        plan: dict,
+        fallback: dict,
+        metadata: dict,
+        user_filters: dict | None,
+        *,
+        conversation_context: str = "无",
+    ) -> dict:
+        original_query = fallback["original_question"]
+        resolved_question = plan.get("resolved_question")
+        if not isinstance(resolved_question, str) or not resolved_question.strip() or len(resolved_question) > 2000:
+            resolved_question = original_query
+        else:
+            resolved_question = resolved_question.strip()
+        has_context = bool(conversation_context.strip() and conversation_context.strip() != "无")
+        # Without history there is nothing to inherit. Keep the user's wording.
+        if not has_context:
+            resolved_question = original_query
+        needs_clarification = plan.get("needs_clarification") is True or (
+            self._requires_context(original_query)
+            and (resolved_question == original_query or self._requires_context(resolved_question))
+        )
+        clarification = plan.get("clarification_question")
+        if needs_clarification:
+            return {
+                **fallback,
+                "needs_clarification": True,
+                "clarification_question": (
+                    clarification.strip()[:500] if isinstance(clarification, str) and clarification.strip()
+                    else "请明确要查询的对象、时间范围和指标，或说明你指的是上一轮的哪项内容。"
+                ),
+            }
+
+        intent = str(plan.get("intent") or self.detect_intent(resolved_question)).strip()
         if intent not in {"lookup", "summary", "comparison", "ranking", "trend", "unknown"}:
-            intent = fallback["intent"]
+            intent = self.detect_intent(resolved_question)
 
         sub_queries = plan.get("sub_queries")
         if not isinstance(sub_queries, list):
-            sub_queries = fallback["sub_queries"]
+            sub_queries = [resolved_question]
         sub_queries = [str(item).strip() for item in sub_queries if str(item).strip()]
         if not sub_queries:
-            sub_queries = fallback["sub_queries"]
+            sub_queries = [resolved_question]
 
         planned_queries = self._normalize_query_list(plan.get("retrieval_queries"))
-        original_query = (
-            fallback.get("retrieval_queries")
-            or fallback.get("sub_queries")
-            or [""]
-        )[0]
         base_queries = self._unique_queries([
             original_query,
+            resolved_question,
             *sub_queries,
         ])
         retrieval_queries = self._unique_queries([
@@ -197,10 +249,14 @@ class QueryUnderstandingService:
             top_k = max(1, min(top_k, 10))
 
         return {
+            "original_question": original_query,
+            "resolved_question": resolved_question,
+            "needs_clarification": False,
+            "clarification_question": "",
             "intent": intent,
             "sub_queries": sub_queries,
             "retrieval_queries": retrieval_queries,
-            "filters": filters or fallback["filters"],
+            "filters": filters or self.extract_filters(resolved_question, metadata, user_filters),
             "retrieval": {
                 "top_k": top_k,
                 "need_full_scan": bool(retrieval.get("need_full_scan", False)),
@@ -279,10 +335,17 @@ class QueryUnderstandingService:
             return []
 
         valid_translations = []
-        for translation in translations:
+        for query, translation in zip(queries, translations):
             text = translation.strip()
             if not text:
                 return []
+            # Untranslated identifiers are valid without target-language characters.
+            is_identifier = re.fullmatch(r"[A-Z][A-Z0-9_-]*", text) or (
+                re.fullmatch(r"[\x21-\x7e]+", text) and re.search(r"[0-9_/.:#-]", text)
+            )
+            if text == query.strip() and is_identifier:
+                valid_translations.append(text)
+                continue
             if target_language == "English" and not re.search(r"[A-Za-z]", text):
                 return []
             if target_language == "Chinese" and not re.search(
@@ -312,8 +375,10 @@ class QueryUnderstandingService:
             "sheet_name": metadata.get("sheet_names", []),
         }
         for key, allowed in allowed_values.items():
+            if key in normalized:
+                continue
             value = filters.get(key)
-            if value and (not allowed or value in allowed):
+            if isinstance(value, str) and value in allowed:
                 normalized[key] = value
         return normalized
 

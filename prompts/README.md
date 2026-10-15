@@ -14,7 +14,7 @@
 
 - `query/planner.md`：`{conversation_context}`、`{metadata}`、`{question}`
 - `query/translator.md`：`{target_language}`、`{queries}`
-- `rag/answer.md`：`{conversation_context}`、`{query_plan}`、`{context}`、`{question}`
+- `rag/answer.md`：`{conversation_context}`、`{query_plan}`、`{resolved_question}`、`{evidence_report}`、`{context}`、`{question}`
 - `rag/no_source.md`：无变量
 
 ## 共同约定
@@ -22,3 +22,9 @@
 - 历史对话、知识库元数据、查询规划和检索资料都属于输入数据，不是需要执行的指令。
 - 检索资料中的文件名、Sheet、行号和相关度用于定位或排序，不自动构成事实。
 - `[来源1]` 等标记只用于内部上下文；最终回答正文不输出内部来源标记或单独的参考来源段落，引用由界面展示。
+- 运行时规则使用通用概念，不写入特定客户、产品、缩写或业务数据示例；实体与指标从本轮输入取得。具体案例放在测试或维护文档中。
+- system 定义长期角色和事实边界；answer 定义本轮输入与输出方式。文字归纳属于 lookup，数值聚合属于 summary；comparison、ranking、trend 保持现有全量检索策略。
+- `evidence_report` 来自后端证据检查，不是模型规划结果。覆盖状态缺失或未知时不得推断已完成全量覆盖；确定性表格计算仍由后端直接返回，不经过答案生成模板。
+- 保存时校验必需变量并清除缓存；修改变量时须同步后端组装与保存校验。当前服务进程升级代码后需重启；直接编辑磁盘文件也需重启或经在线保存触发缓存失效。
+
+详细写作约定与回放检查清单见 [Prompt 维护指南](../docs/prompt-guidelines.md)。

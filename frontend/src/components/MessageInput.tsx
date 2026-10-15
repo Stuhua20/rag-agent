@@ -2,10 +2,11 @@ import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 
 type Props = {
   disabled?: boolean;
+  generating?: boolean;
   onSend: (question: string) => Promise<boolean>;
 };
 
-export default function MessageInput({ disabled = false, onSend }: Props) {
+export default function MessageInput({ disabled = false, generating = false, onSend }: Props) {
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
@@ -82,12 +83,12 @@ export default function MessageInput({ disabled = false, onSend }: Props) {
           value={value}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="输入问题，系统会检索 Excel 知识库并生成回答"
+          placeholder="输入问题，将在当前文档范围内检索并回答"
         />
         {value && <span className="composer-count">{value.length} 字</span>}
       </div>
       <button type="submit" disabled={disabled || !value.trim()}>
-        {disabled ? "生成中..." : "发送"}
+        {generating ? "生成中..." : "发送"}
       </button>
     </form>
   );

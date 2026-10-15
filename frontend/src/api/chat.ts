@@ -1,4 +1,5 @@
 import type { ChatRequest, SourceItem } from "../types/chat";
+import { ApiError } from "./client";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -39,7 +40,7 @@ export async function sendChatMessageStream(
   if (!response.ok) {
     const err = await response.json().catch(() => null);
     const detail = err && typeof err.detail === "string" ? err.detail : null;
-    throw new Error(detail ?? `请求失败（HTTP ${response.status}）`);
+    throw new ApiError(detail ?? `请求失败（HTTP ${response.status}）`, response.status);
   }
 
   const reader = response.body?.getReader();

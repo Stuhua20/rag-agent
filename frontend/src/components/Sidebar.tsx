@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { NavLink, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { deleteConversation, fetchConversations } from "../api/conversations";
+import { deleteConversation, fetchConversations, renameConversation } from "../api/conversations";
 import ConfirmModal from "./ConfirmModal";
+import RenameConversationDialog from "./RenameConversationDialog";
 import { useToast } from "./Toast";
 import type { Conversation } from "../types/conversation";
 
@@ -20,6 +22,11 @@ interface SidebarProps {
 export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationToDelete, setConversationToDelete] = useState<Conversation | null>(null);
+  const [conversationToRename, setConversationToRename] = useState<Conversation | null>(null);
+  const [menu, setMenu] = useState<{ conversation: Conversation; left: number; top: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuOpenerRef = useRef<HTMLButtonElement | null>(null);
+  const loadRevision = useRef(0);
   const [deleting, setDeleting] = useState(false);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -33,13 +40,14 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     let ignore = false;
 
     async function load() {
+      const revision = ++loadRevision.current;
       try {
         const items = await fetchConversations();
-        if (!ignore) {
+        if (!ignore && revision === loadRevision.current) {
           setConversations(items);
         }
       } catch {
-        if (!ignore) {
+        if (!ignore && revision === loadRevision.current) {
           setConversations([]);
         }
       }
@@ -52,6 +60,44 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       window.removeEventListener("conversations:changed", load);
     };
   }, []);
+
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current?.querySelector("button")?.focus();
+    function dismiss(event: PointerEvent | KeyboardEvent | Event) {
+      if (event instanceof KeyboardEvent) {
+        if (event.key === "Escape") {
+          setMenu(null);
+          menuOpenerRef.current?.focus();
+        }
+        return;
+      }
+      if (event instanceof PointerEvent && event.target instanceof Node &&
+          (menuRef.current?.contains(event.target) || menuOpenerRef.current?.contains(event.target))) return;
+      setMenu(null);
+    }
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", dismiss);
+    window.addEventListener("resize", dismiss);
+    document.addEventListener("scroll", dismiss, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", dismiss);
+      window.removeEventListener("resize", dismiss);
+      document.removeEventListener("scroll", dismiss, true);
+    };
+  }, [menu]);
+
+  async function saveConversationTitle(title: string) {
+    if (!conversationToRename) return;
+    const updated = await renameConversation(conversationToRename.id, title);
+    // Invalidate any list request started before this mutation completed.
+    loadRevision.current += 1;
+    setConversations((current) => current.map((item) => item.id === updated.id ? { ...item, title: updated.title } : item));
+    toast("聊天名称已更新", "success");
+    window.dispatchEvent(new CustomEvent("conversation:renamed", { detail: updated }));
+    window.dispatchEvent(new Event("conversations:changed"));
+  }
 
   function openNewChat() {
     navigate("/");
@@ -88,7 +134,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     <aside className="sidebar">
       <div className="sidebar-top">
         <div className="brand-row">
-          <div className="brand">知识库demo</div>
+          <div className="brand">知识库检索工具</div>
           <button
             type="button"
             className="sidebar-collapse"
@@ -144,12 +190,19 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
               </button>
               <button
                 type="button"
-                className="sidebar-chat-delete"
-                title={`删除 ${conversation.title}`}
-                aria-label={`删除 ${conversation.title}`}
-                onClick={() => setConversationToDelete(conversation)}
+                className="sidebar-chat-more"
+                title={`更多操作：${conversation.title}`}
+                aria-label={`更多操作：${conversation.title}`}
+                aria-expanded={menu?.conversation.id === conversation.id}
+                aria-controls={menu?.conversation.id === conversation.id ? "conversation-actions" : undefined}
+                onClick={(event) => {
+                  if (menu?.conversation.id === conversation.id) { setMenu(null); return; }
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  menuOpenerRef.current = event.currentTarget;
+                  setMenu({ conversation, left: Math.max(8, rect.right - 144), top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 104)) });
+                }}
               >
-                <Icon name="trash" />
+                <span aria-hidden="true">⋯</span>
               </button>
             </div>
           ))}
@@ -159,12 +212,32 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </div>
       </div>
 
+      {menu && createPortal(
+        <div ref={menuRef} id="conversation-actions" className="sidebar-chat-menu" role="group" aria-label="聊天操作" style={{ left: menu.left, top: menu.top }}
+          onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget) && event.relatedTarget !== menuOpenerRef.current) setMenu(null); }}>
+          <button type="button" onClick={() => {
+            menuOpenerRef.current?.focus();
+            setConversationToRename(menu.conversation);
+            setMenu(null);
+          }}>重命名</button>
+          <button type="button" className="danger" onClick={() => {
+            menuOpenerRef.current?.focus();
+            setConversationToDelete(menu.conversation);
+            setMenu(null);
+          }}>删除</button>
+        </div>, document.body,
+      )}
+
+      {conversationToRename && <RenameConversationDialog key={conversationToRename.id} conversation={conversationToRename}
+        onSave={saveConversationTitle} onClose={() => setConversationToRename(null)} />}
+
       <ConfirmModal
         open={Boolean(conversationToDelete)}
         title="删除聊天记录"
         message={`确定删除「${conversationToDelete?.title ?? ""}」吗？此操作无法撤销。`}
         confirmLabel={deleting ? "删除中..." : "删除"}
         danger
+        busy={deleting}
         onConfirm={confirmDeleteConversation}
         onCancel={() => {
           if (!deleting) setConversationToDelete(null);

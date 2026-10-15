@@ -107,16 +107,18 @@ class TableAnalysisService:
         return None
 
     def _load_rows(self, filters: dict) -> list[dict]:
+        allowed_ids = set(filters["document_ids"]) if "document_ids" in filters else None
         documents = {
             item["id"]: item
             for item in json_store.list_items("documents.json")
             if item.get("status") == "indexed" and item.get("id")
+            and (allowed_ids is None or item["id"] in allowed_ids)
         }
         rows = []
         seen_rows = set()
         for chunk in json_store.list_items("chunks.json"):
             document = documents.get(chunk.get("document_id"))
-            if not document or not self._matches_filters(chunk, document, filters):
+            if not document or not self._matches_filters(chunk, filters):
                 continue
             chunk_metadata = chunk.get("metadata", {}) or {}
             for row_number, values in self._parse_chunk_rows(chunk):
@@ -136,16 +138,8 @@ class TableAnalysisService:
                 )
         return rows
 
-    def _matches_filters(self, chunk: dict, document: dict, filters: dict) -> bool:
+    def _matches_filters(self, chunk: dict, filters: dict) -> bool:
         metadata = chunk.get("metadata", {}) or {}
-        permission_level = filters.get("permission_level")
-        if permission_level is not None:
-            try:
-                if int(metadata.get("permission_level", document.get("permission_level", 1))) > int(permission_level):
-                    return False
-            except (TypeError, ValueError):
-                return False
-
         sheet_name = filters.get("sheet_name")
         if sheet_name and chunk.get("sheet_name", metadata.get("sheet_name")) != sheet_name:
             return False

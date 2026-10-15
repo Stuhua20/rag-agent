@@ -11,10 +11,10 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 async def upload_document(
     file: UploadFile = File(...),
     file_name: str | None = Form(default=None),
-    permission_level: int = Form(default=1, ge=1, le=3),
+    source_relative_path: str | None = Form(default=None),
 ) -> dict:
     try:
-        return await document_pipeline.upload_and_parse(file, file_name, permission_level)
+        return await document_pipeline.upload_and_parse(file, file_name, source_relative_path)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:

@@ -12,11 +12,15 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 @router.post("", response_model=ChatResponse)
 def chat(request: ChatRequest) -> dict:
+    conversation = chat_service.prepare_conversation(
+        request.conversation_id, request.question, request.expected_scope_revision,
+    )
     return chat_service.ask(
         question=request.question,
         conversation_id=request.conversation_id,
         top_k=request.top_k,
         filters=request.filters,
+        _conversation=conversation,
     )
 
 
@@ -26,6 +30,10 @@ def _sse_format(event: str, data: dict) -> str:
 
 @router.post("/stream")
 def chat_stream(request: ChatRequest):
+    # Validate before sending SSE headers; invalid scopes must not start a run.
+    conversation = chat_service.prepare_conversation(
+        request.conversation_id, request.question, request.expected_scope_revision,
+    )
     def generate():
         try:
             for chunk in chat_service.ask_stream(
@@ -33,6 +41,7 @@ def chat_stream(request: ChatRequest):
                 conversation_id=request.conversation_id,
                 top_k=request.top_k,
                 filters=request.filters,
+                _conversation=conversation,
             ):
                 yield _sse_format(chunk["event"], chunk["data"])
         except Exception as exc:

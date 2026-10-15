@@ -7,6 +7,7 @@ type Props = {
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
+  busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -18,6 +19,7 @@ export default function ConfirmModal({
   confirmLabel = "确认",
   cancelLabel = "取消",
   danger = false,
+  busy = false,
   onConfirm,
   onCancel,
 }: Props) {
@@ -56,6 +58,7 @@ export default function ConfirmModal({
             type="button"
             className="modal-cancel"
             ref={cancelRef}
+            disabled={busy}
             onClick={onCancel}
           >
             {cancelLabel}
@@ -64,6 +67,7 @@ export default function ConfirmModal({
             type="button"
             className={`modal-confirm${danger ? " danger" : ""}`}
             onClick={onConfirm}
+            disabled={busy}
           >
             {confirmLabel}
           </button>

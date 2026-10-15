@@ -134,7 +134,6 @@ class TableChunkerService:
             "token_count": len(content),
             "metadata": {
                 "file_name": file_name,
-                "permission_level": document.get("permission_level"),
                 "sheet_name": sheet_name,
                 "row_start": row_start,
                 "row_end": row_end,

@@ -209,7 +209,6 @@ def check_deterministic_table_analysis() -> None:
                         "id": "doc-test",
                         "file_name": "sales.csv",
                         "status": "indexed",
-                        "permission_level": 1,
                     }
                 ],
             )
@@ -292,7 +291,6 @@ def check_deterministic_table_analysis() -> None:
                         "id": "doc-en",
                         "file_name": "revenue.csv",
                         "status": "indexed",
-                        "permission_level": 1,
                     }
                 ],
             )
@@ -361,7 +359,7 @@ def check_upload_limit_and_cleanup() -> None:
                 filename="large.csv",
             )
             try:
-                asyncio.run(document_pipeline.upload_and_parse(upload, None, 1))
+                asyncio.run(document_pipeline.upload_and_parse(upload, None))
             except ValueError as exc:
                 assert "exceeds" in str(exc)
             else:
