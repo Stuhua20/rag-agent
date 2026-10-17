@@ -12,6 +12,15 @@
 .scope-hint { color: var(--color-text-secondary); font-size: 12px; margin: 8px 0 0; }
 .scope-error { color: var(--color-error); font-size: 13px; overflow-wrap: anywhere; }
 .scope-history-marker { align-self: center; color: var(--color-text-secondary); font-size: 12px; text-align: center; padding: 4px 12px; }
+.selected-documents { display: flex; flex-wrap: wrap; gap: 6px; max-height: 84px; overflow-y: auto; margin-top: 9px; padding: 2px; }
+.selected-document { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 30px; padding: 5px 9px; border: 1px solid #bfdbfe; border-radius: 7px; color: var(--color-primary-dark); background: var(--color-primary-light); font-size: 12px; font-weight: 400; text-align: left; }
+.selected-document > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selected-document svg { flex-shrink: 0; }
+.selected-document:hover { background: #dbeafe; box-shadow: none; }
+.selected-document.unavailable { color: var(--color-error); border-color: var(--color-error-border); background: var(--color-error-bg); }
+.selected-document small { flex-shrink: 0; }
+.scope-retry { padding: 2px 6px; margin-left: 4px; color: var(--color-primary); background: transparent; font-size: 12px; }
+.selected-document:focus-visible, .scope-retry:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .document-scope-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 0; border: 1px solid var(--color-border); border-radius: var(--radius-lg); color: var(--color-text); background: var(--color-surface); box-shadow: var(--shadow-xl); }
 .document-scope-dialog::backdrop { background: rgba(24, 24, 27, 0.4); }
 .document-scope-shell { display: flex; flex-direction: column; gap: 16px; padding: 24px; min-height: 0; }
@@ -41,6 +50,7 @@
 .document-scope-shell footer span { margin-right: auto; color: var(--color-text-secondary); font-size: 12px; }
 .scope-modes legend { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 600px) {
+  .selected-document { min-height: 36px; }
   .document-scope-bar { padding: 10px 16px 0; }
   .document-scope-shell { padding: 18px; gap: 14px; }
   .document-scope-shell footer { flex-wrap: wrap; }

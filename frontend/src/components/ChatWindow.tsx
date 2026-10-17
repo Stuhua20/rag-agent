@@ -10,10 +10,11 @@ type Props = {
   loading: boolean;
   disabled?: boolean;
   scopeControls?: ReactNode;
+  emptyState?: ReactNode;
   onSend: (question: string) => Promise<boolean>;
 };
 
-export default function ChatWindow({ messages, loading, disabled, scopeControls, onSend }: Props) {
+export default function ChatWindow({ messages, loading, disabled, scopeControls, emptyState, onSend }: Props) {
   const panelId = useId();
   const [selection, setSelection] = useState<{ messageId: string; chunkId: string } | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
@@ -30,13 +31,13 @@ export default function ChatWindow({ messages, loading, disabled, scopeControls,
   return (
     <section className={`chat-window${selectedSource ? " sources-open" : ""}`}>
       <div className="chat-thread">
-        <MessageList messages={messages} loading={loading} activeSource={activeSource} panelId={panelId} onSelectSource={(messageId, chunkId, opener) => {
+        <MessageList messages={messages} loading={loading} emptyState={emptyState} activeSource={activeSource} panelId={panelId} onSelectSource={(messageId, chunkId, opener) => {
           openerRef.current = opener;
           setSelection({ messageId, chunkId });
         }} onCloseSources={closeSources} />
         <div className="chat-composer">
           {scopeControls}
-          <MessageInput disabled={loading || disabled} generating={loading} onSend={onSend} />
+          <MessageInput disabled={disabled} generating={loading} onSend={onSend} />
         </div>
       </div>
       {selectedSource && activeSource && <SourceEvidencePanel id={panelId} sources={sources} selected={selectedSource} onSelect={(chunkId) => setSelection({ messageId: activeSource.messageId, chunkId })} onClose={closeSources} />}

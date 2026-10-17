@@ -1,4 +1,5 @@
-import { Fragment, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import AnswerCard from "./AnswerCard";
 import ChatIcon from "./ChatIcon";
 import { useToast } from "./Toast";
@@ -8,22 +9,37 @@ import { answerContent } from "../utils/answerPresentation";
 type Props = {
   messages: ChatMessage[];
   loading: boolean;
+  emptyState?: ReactNode;
   activeSource?: { messageId: string; chunkId: string } | null;
   panelId: string;
   onSelectSource: (messageId: string, chunkId: string, opener: HTMLButtonElement) => void;
   onCloseSources: () => void;
 };
 
-export default function MessageList({ messages, loading, activeSource, panelId, onSelectSource, onCloseSources }: Props) {
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+export default function MessageList({ messages, loading, emptyState, activeSource, panelId, onSelectSource, onCloseSources }: Props) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const followingRef = useRef(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [showJump, setShowJump] = useState(false);
   const { toast } = useToast();
 
   useLayoutEffect(() => {
-    if (followingRef.current) bottomRef.current?.scrollIntoView({ block: "end" });
+    const list = listRef.current;
+    if (!list) return;
+    if (followingRef.current) list.scrollTop = list.scrollHeight;
+    setShowJump(list.scrollHeight - list.scrollTop - list.clientHeight >= 80);
   }, [messages, loading]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const observer = new ResizeObserver(() => {
+      if (followingRef.current) list.scrollTop = list.scrollHeight;
+      setShowJump(list.scrollHeight - list.scrollTop - list.clientHeight >= 80);
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, []);
 
   async function copyMessage(message: ChatMessage) {
     try {
@@ -41,10 +57,16 @@ export default function MessageList({ messages, loading, activeSource, panelId, 
     lastMessage?.role === "assistant";
 
   return (
+    <div className="message-list-shell">
     <div className="message-list" ref={listRef} onScroll={() => {
       const list = listRef.current;
-      if (list) followingRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+      if (list) {
+        const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+        followingRef.current = nearBottom;
+        setShowJump(!nearBottom);
+      }
     }}>
+      {messages.length === 0 && !loading && emptyState}
       {messages.map((message, index) => (
         <Fragment key={message.id}>
         {(message.scope_revision ?? 0) > 0 && (index === 0 || (messages[index - 1].scope_revision ?? 0) !== message.scope_revision) && (
@@ -101,7 +123,12 @@ export default function MessageList({ messages, loading, activeSource, panelId, 
           </div>
         </div>
       )}
-      <div ref={bottomRef} />
+    </div>
+    {showJump && <button type="button" className="jump-to-bottom" onClick={() => {
+      followingRef.current = true;
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: reducedMotion ? "instant" : "smooth" });
+    }}><span aria-hidden="true">↓</span> 回到底部</button>}
     </div>
   );
 }

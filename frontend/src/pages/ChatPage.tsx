@@ -6,29 +6,28 @@ import { createConversation, fetchConversation, fetchConversationMessages, updat
 import ChatWindow from "../components/ChatWindow";
 import DocumentScopeDialog from "../components/DocumentScopeDialog";
 import TopBar from "../components/TopBar";
+import ChatWelcome from "../components/ChatWelcome";
+import SelectedDocuments from "../components/SelectedDocuments";
 import { useToast } from "../components/Toast";
 import type { ChatMessage } from "../types/chat";
 import type { Conversation, DocumentScope } from "../types/conversation";
 
 const ALL_DOCUMENTS: DocumentScope = { mode: "all", document_ids: [] };
-const initialMessages: ChatMessage[] = [{
-  id: "welcome", role: "assistant",
-  content: "可以开始提问了。你可以选择当前会话要检索的文档，我会根据引用证据回答。",
-  created_at: new Date().toISOString(),
-}];
 
 export default function ChatPage() {
   const [searchParams] = useSearchParams();
   const conversationId = searchParams.get("conversationId");
   const location = useLocation();
+  const navigationState = location.state as { chatSessionKey?: string } | null;
+  const sessionKey = navigationState?.chatSessionKey ?? conversationId ?? `new:${location.key}`;
   // A different conversation owns a different component and cancels all prior requests.
-  return <ChatSession key={conversationId ?? `new:${location.key}`} routeConversationId={conversationId} />;
+  return <ChatSession key={sessionKey} sessionKey={sessionKey} routeConversationId={conversationId} />;
 }
 
-function ChatSession({ routeConversationId }: { routeConversationId: string | null }) {
+function ChatSession({ routeConversationId, sessionKey }: { routeConversationId: string | null; sessionKey: string }) {
   const [conversationId, setConversationId] = useState(routeConversationId);
   const [title, setTitle] = useState(routeConversationId ? "正在加载聊天…" : "新聊天");
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [scope, setScope] = useState<DocumentScope>(ALL_DOCUMENTS);
   const [revision, setRevision] = useState(0);
   const [invalidIds, setInvalidIds] = useState<string[]>([]);
@@ -81,7 +80,7 @@ function ChatSession({ routeConversationId }: { routeConversationId: string | nu
     ]).then(([conversation, history]) => {
       if (controller.signal.aborted) return;
       applyConversation(conversation);
-      setMessages(history.length ? history : initialMessages);
+      setMessages(history);
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) {
         setTitle("聊天加载失败");
@@ -160,7 +159,7 @@ function ChatSession({ routeConversationId }: { routeConversationId: string | nu
           if (!active()) return;
           setMessages((current) => current.map((msg) => msg.id === assistantId ? { ...msg, content: answer } : msg));
           window.dispatchEvent(new Event("conversations:changed"));
-          if (!routeConversationId) navigate(`/?conversationId=${convId}`, { replace: true });
+          if (!routeConversationId) navigate(`/?conversationId=${convId}`, { replace: true, state: { chatSessionKey: sessionKey } });
         },
       }, controller.signal);
       return active();
@@ -186,9 +185,12 @@ function ChatSession({ routeConversationId }: { routeConversationId: string | nu
     <TopBar title={title} />
     <div className="workspace chat-workspace">
       <section className="chat-layout">
-        <ChatWindow messages={messages} loading={loading} disabled={blocked} onSend={handleSend} scopeControls={
+        <ChatWindow messages={messages} loading={loading} disabled={blocked} onSend={handleSend}
+          emptyState={loadingHistory ? <p className="chat-empty-status" role="status">正在加载聊天记录…</p> : loadError ? <p className="chat-empty-status">聊天记录加载失败，请在下方重试。</p> : <ChatWelcome />}
+          scopeControls={
           <div className="document-scope-bar">
             <div className="scope-bar-row"><span>检索范围：<strong>{scopeLabel}</strong></span><button type="button" className="scope-secondary" disabled={loading || loadingHistory || Boolean(loadError) || savingScope} onClick={() => setScopeOpen(true)}>选择文档</button></div>
+            {!loadingHistory && !loadError && scope.mode === "selected" && <SelectedDocuments documentIds={scope.document_ids} onEdit={() => setScopeOpen(true)} disabled={loading || savingScope} />}
             {scopeNotice && <p className="scope-hint" role="status">{scopeNotice}</p>}
             {invalidIds.length > 0 && <p className="scope-error" role="alert">{invalidIds.length} 个所选文档已不可用，请重新选择检索文档。</p>}
             {loadError && <p className="scope-error" role="alert">{loadError} <button type="button" className="scope-secondary" onClick={() => setRetry((value) => value + 1)}>重新加载会话</button></p>}
