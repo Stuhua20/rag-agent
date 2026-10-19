@@ -29,3 +29,6 @@ backend/data/*
 
 # Local development documentation
 /开发文档/
+
+# Local generated outputs
+/outputs/
