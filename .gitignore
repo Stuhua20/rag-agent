@@ -26,3 +26,6 @@ backend/storage/data-backups/
 
 backend/data/*
 !backend/data/.gitkeep
+
+# Local development documentation
+/开发文档/
