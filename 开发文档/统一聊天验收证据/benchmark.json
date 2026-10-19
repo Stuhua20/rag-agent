@@ -1,0 +1,9 @@
+{
+  "rows": 50000,
+  "columns": 5,
+  "groups": 2000,
+  "elapsed_seconds": 11.43,
+  "python_peak_mb": 152.98,
+  "result_json_bytes": 988383,
+  "shared_denominators": 1
+}

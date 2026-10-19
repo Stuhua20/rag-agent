@@ -147,27 +147,30 @@ class ResolvedQuestionChatTests(unittest.TestCase):
             return {"sources": data[0]["sources"], **data[-1]}
         return response.json()
 
-    def test_sync_and_stream_compute_resolved_scope_and_keep_history_original(self) -> None:
+    def test_sync_and_stream_retrieve_resolved_scope_and_keep_history_original(self) -> None:
         self.seed_table()
-        original = "那2月份呢？"
-        resolved = "A经销商2月份的销售额合计是多少？"
-        raw = {"resolved_question": resolved, "intent": "summary"}
+        original = "那1月份呢？"
+        resolved = "A经销商1月份的销售额是多少？"
+        raw = {"resolved_question": resolved, "intent": "lookup"}
+        answer = "A经销商1月份销售额为10。"
+        source = {"chunk_id": "chunk", "document_id": "doc", "file_name": "sales.csv", "sheet_name": "sales",
+                  "score_type": "exact_match", "content": "行 2：客户=A经销商；月份=1月份；销售额=10"}
         for path in ("/api/chat", "/api/chat/stream"):
             with self.subTest(path=path):
-                conversation_id = self.seed_conversation()
+                conversation_id = self.seed_conversation("A经销商2月份的销售额是多少？")
+                replies = [json.dumps(raw)] if path.endswith("/stream") else [json.dumps(raw), answer]
                 with (
-                    patch.object(llm_service, "generate_answer", return_value=json.dumps(raw)) as planner,
-                    patch.object(llm_service, "generate_answer_stream") as answer_stream,
+                    patch.object(llm_service, "generate_answer", side_effect=replies) as model,
+                    patch.object(llm_service, "generate_answer_stream", return_value=iter([answer])),
+                    patch.object(retrieval_service, "search_multiple", return_value=[source]),
                     patch.object(answer_quality_service, "evaluate_evidence", wraps=answer_quality_service.evaluate_evidence) as gate,
                     patch.object(answer_quality_service, "verify_answer", wraps=answer_quality_service.verify_answer) as verifier,
                 ):
                     result = self.send(path, original, conversation_id)
-                self.assertIn("合计为 50", result["answer"])
-                self.assertTrue(result["quality"]["evidence_gate"]["deterministic"])
+                self.assertEqual(result["answer"], answer)
                 self.assertEqual(gate.call_args.args[0], resolved)
                 self.assertEqual(verifier.call_args.args[1], resolved)
-                planner.assert_called_once()
-                answer_stream.assert_not_called()
+                self.assertEqual(model.call_count, len(replies))
                 history = chat_service.list_messages(conversation_id)
                 self.assertEqual(history[-2]["content"], original)
                 self.assertEqual(history[-1]["quality"], result["quality"])
@@ -262,10 +265,14 @@ class ResolvedQuestionChatTests(unittest.TestCase):
 
     def test_legacy_plan_without_new_fields_still_works(self) -> None:
         self.seed_table()
-        question = "销售额合计是多少？"
-        with patch.object(query_understanding_service, "plan", return_value={"intent": "summary"}):
+        question = "A经销商1月份销售额是多少？"
+        source = {"chunk_id": "chunk", "document_id": "doc", "file_name": "sales.csv", "sheet_name": "sales",
+                  "score_type": "exact_match", "content": "行 2：客户=A经销商；月份=1月份；销售额=10"}
+        with patch.object(query_understanding_service, "plan", return_value={"intent": "lookup"}), patch.object(
+            retrieval_service, "search_multiple", return_value=[source],
+        ), patch.object(llm_service, "generate_answer", return_value="A经销商1月份销售额为10。"):
             result = ChatService().ask(question)
-        self.assertIn("合计为 960", result["answer"])
+        self.assertEqual("A经销商1月份销售额为10。", result["answer"])
         self.assertEqual(result["quality"]["query_understanding"]["resolved_question"], question)
 
 

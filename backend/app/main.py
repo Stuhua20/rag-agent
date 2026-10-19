@@ -6,11 +6,24 @@ from fastapi.responses import FileResponse
 from app.core.config import settings
 from app.routers import chat, conversations, documents, health, prompts, settings as settings_router
 from app.services.json_store_service import json_store
+from app.services.chat_service import chat_service
+from contextlib import asynccontextmanager
 
 import os
 from pathlib import Path
 
-app = FastAPI(title=settings.app_name)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    json_store.initialize()
+    if settings.chat_runtime == "langgraph":
+        chat_service.agent_runtime()
+    try:
+        yield
+    finally:
+        chat_service.close()
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,8 +51,3 @@ if frontend_dist.exists():
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
         return FileResponse(str(frontend_dist / "index.html"))
-
-
-@app.on_event("startup")
-def startup() -> None:
-    json_store.initialize()

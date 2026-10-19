@@ -107,13 +107,13 @@ class AnswerPromptIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.service = ChatService()
         self.source = {"content": "已记录的操作说明。", "score_type": "exact_match"}
-        self.state = {"full_scan_required": True, "full_scan_complete": True, "deterministic": False}
+        self.state = {"full_scan_required": True, "full_scan_complete": True}
         mocks = [
             (self.service, "_get_or_create_conversation", {"id": "prompt-test"}),
             (self.service, "list_messages", []),
             (self.service, "_add_message", None),
             (self.service, "_touch_conversation", None),
-            (self.service, "_prepare_retrieval", ([self.source], None, self.state)),
+            (self.service, "_prepare_retrieval", ([self.source], self.state)),
             (knowledge_metadata_service, "snapshot", {}),
             (query_understanding_service, "plan", {
                 "intent": "lookup", "resolved_question": "补全后的操作问题", "retrieval": {"need_full_scan": False},

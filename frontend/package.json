@@ -3,7 +3,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:upload": "node --experimental-strip-types --test tests/uploadQueue.test.ts"
+    "test:upload": "node --experimental-strip-types --test tests/uploadQueue.test.ts",
+    "test:chat": "node --experimental-strip-types --test tests/chatStream.test.ts"
   },
   "dependencies": {
     "react": "^19.0.0",

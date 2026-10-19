@@ -26,7 +26,7 @@ class ChatStreamingTests(unittest.TestCase):
         self.plan = {"intent": "lookup", "sub_queries": ["甲公司销售额"]}
         self.retrieval = self.mock_method(
             self.service, "_prepare_retrieval",
-            return_value=([self.source], None, {"full_scan_required": False}),
+            return_value=([self.source], {"full_scan_required": False}),
         )
         self.mock_method(self.service, "_get_or_create_conversation", return_value={"id": "test-conversation"})
         self.mock_method(self.service, "list_messages", return_value=[])
@@ -93,20 +93,11 @@ class ChatStreamingTests(unittest.TestCase):
         self.assertTrue(done["quality"]["answer_verifier"]["sanitized"])
 
     def test_missing_evidence_returns_fallback_without_calling_model(self) -> None:
-        self.retrieval.return_value = ([], None, {"full_scan_required": False})
+        self.retrieval.return_value = ([], {"full_scan_required": False})
         events = list(self.service.ask_stream("甲公司销售额是多少？"))
         self.assertEqual([event["event"] for event in events], ["sources", "delta", "done"])
         self.assertEqual(events[1]["data"]["text"], events[2]["data"]["answer"])
         self.assertFalse(events[2]["data"]["quality"]["evidence_gate"]["passed"])
-        self.model.assert_not_called()
-
-    def test_deterministic_answer_is_sent_once_without_model(self) -> None:
-        answer = "甲公司销售额为120000元。"
-        self.retrieval.return_value = ([self.source], answer, {"deterministic": True})
-        events = list(self.service.ask_stream("甲公司销售额是多少？"))
-        self.assertEqual([event["event"] for event in events], ["sources", "delta", "done"])
-        self.assertEqual(events[1]["data"]["text"], answer)
-        self.assertEqual(events[2]["data"]["answer"], answer)
         self.model.assert_not_called()
 
     def test_empty_model_stream_returns_verified_fallback(self) -> None:

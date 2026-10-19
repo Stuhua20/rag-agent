@@ -7,10 +7,12 @@ import httpx
 from app.core.config import settings
 from app.services.json_store_service import json_store
 from app.utils.config_utils import as_bool
+from app.agents.budget import check_budget, request_timeout
 
 
 class EmbeddingService:
     def embed_text(self, text: str) -> list[float]:
+        check_budget()
         config = self._get_config()
         if config["mock"]:
             return self._mock_embedding(text, config["dim"])
@@ -20,6 +22,7 @@ class EmbeddingService:
         return vector
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        check_budget()
         config = self._get_config()
         if config["mock"]:
             return [self._mock_embedding(text, config["dim"]) for text in texts]
@@ -97,7 +100,7 @@ class EmbeddingService:
                     f"{config['base_url']}/embeddings",
                     headers={"Authorization": f"Bearer {config['api_key']}"},
                     json={"model": config["model"], "input": text},
-                    timeout=60,
+                    timeout=request_timeout(60),
                 )
                 response.raise_for_status()
                 payload = response.json()
@@ -108,7 +111,7 @@ class EmbeddingService:
             f"{config['base_url']}/embeddings",
             headers={"Authorization": f"Bearer {config['api_key']}"},
             json={"model": config["model"], "input": texts},
-            timeout=60,
+            timeout=request_timeout(60),
         )
         response.raise_for_status()
         payload = response.json()

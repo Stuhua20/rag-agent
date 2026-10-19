@@ -135,7 +135,8 @@ export default function MessageList({ messages, loading, emptyState, activeSourc
 
 function formatRelativeTime(value?: string) {
   if (!value) return "刚刚";
-  const timestamp = new Date(value).getTime();
+  // Historical server timestamps are UTC but predate an explicit timezone suffix.
+  const timestamp = new Date(/(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : value + 'Z').getTime();
   if (Number.isNaN(timestamp)) return "刚刚";
   const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
   if (seconds < 60) return "刚刚";

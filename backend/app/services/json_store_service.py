@@ -103,6 +103,19 @@ class JsonStoreService:
             self.write_json(file_name, items)
             return item
 
+    def add_run_message(self, message: dict) -> dict:
+        """Check session existence and deduplicate a run's role under the same lock."""
+        with self._lock:
+            if self.get_item("conversations.json", message["conversation_id"]) is None:
+                raise ValueError("会话已删除，不能继续写入消息。")
+            items = self.list_items("messages.json")
+            existing = next((item for item in items if item.get("run_id") == message["run_id"]
+                             and item["role"] == message["role"]), None)
+            if existing:
+                return existing
+            self.write_json("messages.json", [*items, message])
+            return message
+
     def update_item(
         self, file_name: str, item_id: str, updates: dict, *, expected: dict | None = None,
     ) -> dict | None:

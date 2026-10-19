@@ -9,7 +9,7 @@ import TopBar from "../components/TopBar";
 import ChatWelcome from "../components/ChatWelcome";
 import SelectedDocuments from "../components/SelectedDocuments";
 import { useToast } from "../components/Toast";
-import type { ChatMessage } from "../types/chat";
+import type { AgentStep, ChatMessage } from "../types/chat";
 import type { Conversation, DocumentScope } from "../types/conversation";
 
 const ALL_DOCUMENTS: DocumentScope = { mode: "all", document_ids: [] };
@@ -38,6 +38,8 @@ function ChatSession({ routeConversationId, sessionKey }: { routeConversationId:
   const [scopeOpen, setScopeOpen] = useState(false);
   const [savingScope, setSavingScope] = useState(false);
   const [scopeNotice, setScopeNotice] = useState("");
+  const conversationIdRef = useRef(routeConversationId);
+  const creationRef = useRef<Promise<Conversation> | null>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
   const saveControllerRef = useRef<AbortController | null>(null);
   const mounted = useRef(false);
@@ -125,6 +127,26 @@ function ChatSession({ routeConversationId, sessionKey }: { routeConversationId:
     }
   }
 
+  async function ensureConversation(signal: AbortSignal, question = '') {
+    if (conversationIdRef.current) return conversationIdRef.current;
+    if (!creationRef.current) creationRef.current = createConversation(question.slice(0, 30) || '新对话', scope, signal);
+    try {
+      const conversation = await creationRef.current;
+      if (signal.aborted || !mounted.current) throw new Error('会话创建已取消');
+      conversationIdRef.current = conversation.id;
+      setConversationId(conversation.id); setTitle(conversation.title || '新聊天');
+      window.dispatchEvent(new Event('conversations:changed'));
+      return conversation.id;
+    } finally { creationRef.current = null; }
+  }
+
+  function stopGeneration() {
+    streamControllerRef.current?.abort(); streamControllerRef.current = null;
+    setLoading(false);
+    setMessages((current) => current.map((msg, index) => index === current.length - 1 && msg.role === 'assistant'
+      ? { ...msg, status: 'cancelled', content: msg.content || '本轮已停止，未生成完整结果。' } : msg));
+  }
+
   async function handleSend(question: string) {
     if (streamControllerRef.current || loadingHistory || loadError || savingScope || scopeOpen || invalidIds.length) return false;
     const controller = new AbortController();
@@ -139,12 +161,8 @@ function ChatSession({ routeConversationId, sessionKey }: { routeConversationId:
     let appended = false;
     try {
       if (!targetId) {
-        const conversation = await createConversation(question.slice(0, 30), scope, controller.signal);
+        targetId = await ensureConversation(controller.signal, question);
         if (!active()) return false;
-        targetId = conversation.id;
-        setTitle(conversation.title || "新聊天");
-        setConversationId(targetId);
-        window.dispatchEvent(new Event("conversations:changed"));
       }
       setMessages((current) => [...current, userMessage, assistantMessage]);
       appended = true;
@@ -155,9 +173,24 @@ function ChatSession({ routeConversationId, sessionKey }: { routeConversationId:
         onDelta(text) {
           if (active()) setMessages((current) => current.map((msg) => msg.id === assistantId ? { ...msg, content: msg.content + text } : msg));
         },
-        onDone(convId, answer) {
+        onAgentEvent(event) {
           if (!active()) return;
-          setMessages((current) => current.map((msg) => msg.id === assistantId ? { ...msg, content: answer } : msg));
+          setMessages((current) => current.map((msg) => {
+            if (msg.id !== assistantId) return msg;
+            const steps = msg.agent_steps ?? [];
+            if ((event.event === "step_started" || event.event === "step_done") && event.step_id && event.label) {
+              const step: AgentStep = { step_id: event.step_id, label: event.label, event: event.event };
+              return { ...msg, status: "running", agent_steps: [...steps.filter((item) => item.step_id !== event.step_id), step] };
+            }
+            return { ...msg, run_id: event.run_id ?? msg.run_id, status: "running" };
+          }));
+        },
+        onDone(convId, answer, result) {
+          if (!active()) return;
+          setMessages((current) => current.map((msg) => msg.id === assistantId ? {
+            ...msg, content: answer, quality: result.quality, run_id: result.run_id,
+            status: result.status, sources: result.sources ?? msg.sources,
+          } : msg));
           window.dispatchEvent(new Event("conversations:changed"));
           if (!routeConversationId) navigate(`/?conversationId=${convId}`, { replace: true, state: { chatSessionKey: sessionKey } });
         },
@@ -166,9 +199,9 @@ function ChatSession({ routeConversationId, sessionKey }: { routeConversationId:
     } catch (reason) {
       if (!active()) return false;
       const message = reason instanceof Error ? reason.message : "回答流中断，请重试。";
-      if (appended) setMessages((current) => current.map((msg) => msg.id === assistantId ? { ...msg, content: msg.content ? `${msg.content}\n\n> ⚠️ ${message}` : `⚠️ ${message}` } : msg));
+      if (appended) setMessages((current) => current.map((msg) => msg.id === assistantId ? { ...msg, status: "failed", content: msg.content ? `${msg.content}\n\n> ⚠️ ${message}` : `⚠️ ${message}` } : msg));
       toast(message, "error");
-      if (reason instanceof ApiError && reason.status === 409 && targetId) {
+      if (reason instanceof ApiError && reason.status === 409 && reason.code !== "conversation_busy" && targetId) {
         await refreshScope(targetId, controller.signal).catch(() => undefined);
       }
       return false;
@@ -185,7 +218,7 @@ function ChatSession({ routeConversationId, sessionKey }: { routeConversationId:
     <TopBar title={title} />
     <div className="workspace chat-workspace">
       <section className="chat-layout">
-        <ChatWindow messages={messages} loading={loading} disabled={blocked} onSend={handleSend}
+        <ChatWindow messages={messages} loading={loading} disabled={blocked} onSend={handleSend} onStop={stopGeneration}
           emptyState={loadingHistory ? <p className="chat-empty-status" role="status">正在加载聊天记录…</p> : loadError ? <p className="chat-empty-status">聊天记录加载失败，请在下方重试。</p> : <ChatWelcome />}
           scopeControls={
           <div className="document-scope-bar">

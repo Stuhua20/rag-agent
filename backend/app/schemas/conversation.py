@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class DocumentScope(BaseModel):
@@ -18,11 +18,15 @@ class DocumentScope(BaseModel):
 
 
 class CreateConversationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = None
     document_scope: DocumentScope = Field(default_factory=DocumentScope)
 
 
 class UpdateConversationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     document_scope: DocumentScope
     expected_scope_revision: int = Field(ge=0)
 

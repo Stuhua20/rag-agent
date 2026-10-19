@@ -9,6 +9,20 @@ export type ChatMessage = {
   created_at?: string;
   document_scope?: DocumentScope;
   scope_revision?: number;
+  run_id?: string;
+  status?: string;
+  agent_steps?: AgentStep[];
+};
+
+export type AgentStep = { step_id: string; label: string; event: "step_started" | "step_done" };
+export type AgentEvent = { event: string; run_id?: string; step_id?: string; label?: string };
+export type ChatResult = {
+  conversation_id: string;
+  answer: string;
+  sources?: SourceItem[];
+  quality?: Record<string, unknown>;
+  run_id?: string;
+  status?: string;
 };
 
 export type SourceItem = {

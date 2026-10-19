@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.services.embedding_service import embedding_service
 from app.services.json_store_service import json_store
 from app.utils.similarity import cosine_similarity
+from app.agents.budget import BudgetExceeded, RunCancelled, check_budget
 
 
 QUESTION_WORDS = (
@@ -49,6 +50,7 @@ class RetrievalService:
         scored_sources = []
 
         for embedding in json_store.list_items("embeddings.json"):
+            check_budget()
             if embedding.get("document_id") not in indexed_document_ids:
                 continue
             chunk = chunks_by_id.get(embedding.get("chunk_id"))
@@ -303,6 +305,8 @@ class RetrievalService:
     def _safe_embed_text(self, question: str) -> list[float]:
         try:
             return embedding_service.embed_text(question)
+        except (BudgetExceeded, RunCancelled):
+            raise
         except Exception:
             return []
 

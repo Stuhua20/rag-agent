@@ -2,6 +2,7 @@ import json
 
 from fastapi import APIRouter
 from starlette.responses import StreamingResponse
+from starlette.background import BackgroundTask
 
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.chat_service import chat_service
@@ -34,21 +35,23 @@ def chat_stream(request: ChatRequest):
     conversation = chat_service.prepare_conversation(
         request.conversation_id, request.question, request.expected_scope_revision,
     )
+    # Reserve synchronously, so a concurrent request gets HTTP 409 before SSE headers.
+    stream = chat_service.ask_stream(
+        question=request.question, conversation_id=request.conversation_id,
+        top_k=request.top_k, filters=request.filters, _conversation=conversation,
+    )
     def generate():
         try:
-            for chunk in chat_service.ask_stream(
-                question=request.question,
-                conversation_id=request.conversation_id,
-                top_k=request.top_k,
-                filters=request.filters,
-                _conversation=conversation,
-            ):
+            for chunk in stream:
                 yield _sse_format(chunk["event"], chunk["data"])
         except Exception as exc:
             yield _sse_format("error", {"message": str(exc)})
+        finally:
+            stream.close()
 
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        background=BackgroundTask(stream.close),
     )

@@ -35,6 +35,13 @@ class Settings:
         self.llm_api_key = os.getenv("LLM_API_KEY", "")
         self.llm_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
         self.llm_mock = os.getenv("LLM_MOCK", "true").lower() == "true"
+        self.chat_runtime = os.getenv("CHAT_RUNTIME", "langgraph").strip().lower()
+        if self.chat_runtime not in {"legacy", "langgraph"}:
+            raise ValueError("CHAT_RUNTIME must be legacy or langgraph")
+        self.agent_max_rounds = min(3, max(1, int(os.getenv("AGENT_MAX_RETRIEVAL_ROUNDS", "3"))))
+        self.agent_max_seconds = max(1, float(os.getenv("AGENT_MAX_SECONDS", "180")))
+        self.agent_max_llm_calls = max(1, int(os.getenv("AGENT_MAX_LLM_CALLS", "8")))
+        self.agent_max_tool_calls = max(1, int(os.getenv("AGENT_MAX_TOOL_CALLS", "8")))
 
     def _resolve_path(self, value: str) -> Path:
         path = Path(value)

@@ -8,16 +8,19 @@ import httpx
 from app.core.config import settings
 from app.services.json_store_service import json_store
 from app.utils.config_utils import as_bool
+from app.agents.budget import check_budget, count_llm_call, request_timeout
 
 
 class LlmService:
     def generate_answer(self, prompt: str, system_prompt: str | None = None) -> str:
+        count_llm_call()
         config = self._get_config()
         if config["mock"]:
             return self._mock_answer(prompt)
         return self._api_answer(prompt, config, system_prompt)
 
     def generate_answer_stream(self, prompt: str, system_prompt: str | None = None) -> Generator[str, None, None]:
+        count_llm_call()
         config = self._get_config()
         if config["mock"]:
             yield from self._mock_answer_stream(prompt)
@@ -44,7 +47,8 @@ class LlmService:
         if not context.strip():
             return "知识库中未找到明确依据。"
 
-        first_row = next((line.strip() for line in context.splitlines() if line.strip().startswith("行 ")), "")
+        row_match = re.search(r"(?m)^(?:内容：)?(行\s+\d+：.+)$", context)
+        first_row = row_match.group(1) if row_match else ""
         first_file = self._first_value(context, "文件名：")
         first_sheet = self._first_value(context, "Sheet：")
         answer = "根据已检索知识库资料"
@@ -77,7 +81,7 @@ class LlmService:
                 "messages": self._messages(prompt, system_prompt),
                 "temperature": 0.2,
             },
-            timeout=90,
+            timeout=request_timeout(90),
         )
         response.raise_for_status()
         payload = response.json()
@@ -86,6 +90,7 @@ class LlmService:
     def _mock_answer_stream(self, prompt: str) -> Generator[str, None, None]:
         full_answer = self._mock_answer(prompt)
         for i in range(0, len(full_answer), 3):
+            check_budget()
             yield full_answer[i : i + 3]
             time.sleep(0.03)
 
@@ -105,10 +110,11 @@ class LlmService:
                 "temperature": 0.2,
                 "stream": True,
             },
-            timeout=120,
+            timeout=request_timeout(120),
         ) as response:
             response.raise_for_status()
             for line in response.iter_lines():
+                check_budget()
                 line = line.strip()
                 if not line or not line.startswith("data:"):
                     continue

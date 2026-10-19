@@ -1,0 +1,187 @@
+[
+  {
+    "id": "lookup-a",
+    "category": "lookup",
+    "question": "甲公司销售额是多少？",
+    "contains": "100",
+    "status": "answered",
+    "evidence": [
+      "chunk-a"
+    ]
+  },
+  {
+    "id": "lookup-b",
+    "category": "lookup",
+    "question": "乙公司销售额是多少？",
+    "contains": "900",
+    "status": "answered",
+    "evidence": [
+      "chunk-b"
+    ]
+  },
+  {
+    "id": "payment-a",
+    "category": "lookup",
+    "question": "甲公司的付款条件是什么？",
+    "contains": "30天",
+    "status": "answered",
+    "evidence": [
+      "chunk-a"
+    ]
+  },
+  {
+    "id": "payment-b",
+    "category": "lookup",
+    "question": "乙公司的付款条件是什么？",
+    "contains": "30天",
+    "status": "answered",
+    "evidence": [
+      "chunk-b"
+    ]
+  },
+  {
+    "id": "selected-b",
+    "category": "lookup",
+    "question": "销售额是多少？",
+    "scope": [
+      "b"
+    ],
+    "contains": "900",
+    "status": "answered",
+    "evidence": [
+      "chunk-b"
+    ]
+  },
+  {
+    "id": "followup-b",
+    "category": "context",
+    "question": "那乙公司呢？",
+    "history": "甲公司销售额是多少？",
+    "resolved": "乙公司销售额是多少？",
+    "contains": "900",
+    "status": "answered",
+    "evidence": [
+      "chunk-b"
+    ]
+  },
+  {
+    "id": "followup-payment",
+    "category": "context",
+    "question": "它的付款条件呢？",
+    "history": "甲公司销售额是多少？",
+    "resolved": "甲公司的付款条件是什么？",
+    "contains": "30天",
+    "status": "answered",
+    "evidence": [
+      "chunk-a"
+    ]
+  },
+  {
+    "id": "missing-reference",
+    "category": "context",
+    "question": "它呢？",
+    "clarify": true,
+    "status": "clarification_required",
+    "evidence": []
+  },
+  {
+    "id": "ambiguous-reference",
+    "category": "context",
+    "question": "它的销售额呢？",
+    "history": "比较甲公司和乙公司。",
+    "clarify": true,
+    "status": "clarification_required",
+    "evidence": []
+  },
+  {
+    "id": "compare-payments",
+    "category": "multi_goal",
+    "question": "比较甲公司和乙公司的付款条件",
+    "intent": "comparison",
+    "sub_queries": [
+      "甲公司付款条件",
+      "乙公司付款条件"
+    ],
+    "status": "answered",
+    "evidence": [
+      "chunk-a",
+      "chunk-b"
+    ]
+  },
+  {
+    "id": "separate-sales",
+    "category": "multi_goal",
+    "question": "查询甲公司和乙公司的销售额",
+    "sub_queries": [
+      "甲公司销售额",
+      "乙公司销售额"
+    ],
+    "status": "answered",
+    "evidence": [
+      "chunk-a",
+      "chunk-b"
+    ]
+  },
+  {
+    "id": "different-topics",
+    "category": "multi_goal",
+    "question": "查询甲公司的销售额以及乙公司的付款条件",
+    "sub_queries": [
+      "甲公司销售额",
+      "乙公司付款条件"
+    ],
+    "status": "answered",
+    "evidence": [
+      "chunk-a",
+      "chunk-b"
+    ]
+  },
+  {
+    "id": "missing-one-target",
+    "category": "multi_goal",
+    "question": "比较甲公司和丙公司的付款条件",
+    "intent": "comparison",
+    "sub_queries": [
+      "甲公司付款条件",
+      "丙公司付款条件"
+    ],
+    "status": "insufficient_evidence",
+    "evidence": []
+  },
+  {
+    "id": "unknown-clause",
+    "category": "multi_goal",
+    "question": "比较甲公司和乙公司的退出条款",
+    "intent": "comparison",
+    "sub_queries": [
+      "甲公司退出条款",
+      "乙公司退出条款"
+    ],
+    "status": "insufficient_evidence",
+    "evidence": []
+  },
+  {
+    "id": "no-knowledge",
+    "category": "insufficient",
+    "question": "火星基地库存是多少？",
+    "status": "insufficient_evidence",
+    "evidence": []
+  },
+  {
+    "id": "missing-company",
+    "category": "insufficient",
+    "question": "丙公司销售额是多少？",
+    "status": "insufficient_evidence",
+    "evidence": []
+  },
+  {
+    "id": "scope-excludes-answer",
+    "category": "insufficient",
+    "question": "甲公司销售额是多少？",
+    "scope": [
+      "b"
+    ],
+    "status": "insufficient_evidence",
+    "evidence": []
+  }
+]

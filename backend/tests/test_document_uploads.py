@@ -11,7 +11,6 @@ from app.routers.documents import router
 from app.services.json_store_service import json_store
 from app.services.document_pipeline import document_pipeline
 from app.services.retrieval_service import retrieval_service
-from app.services.table_analysis_service import table_analysis_service
 from app.utils.file_utils import validate_source_relative_path
 
 
@@ -98,7 +97,7 @@ class DocumentUploadTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertNotIn("permission_level", json_store.list_items("documents.json")[0])
 
-    def test_legacy_permission_metadata_no_longer_limits_search_or_analysis(self) -> None:
+    def test_legacy_permission_metadata_no_longer_limits_search(self) -> None:
         response = self.upload_csv()
         self.assertEqual(response.status_code, 200, response.text)
         document_id = response.json()["document_id"]
@@ -112,13 +111,8 @@ class DocumentUploadTests(unittest.TestCase):
         filters = {"permission_level": 1}
         sources = retrieval_service.search("Alice", filters=filters, full_scan=True)
         self.assertEqual({item["document_id"] for item in sources}, {document_id})
-        analysis = table_analysis_service.analyze("amount总计", "aggregate", filters)
-        self.assertIsNotNone(analysis)
-        self.assertIn("10", analysis["answer"])
-
         filters["sheet_name"] = "missing-sheet"
         self.assertEqual(retrieval_service.search("Alice", filters=filters, full_scan=True), [])
-        self.assertIsNone(table_analysis_service.analyze("amount总计", "aggregate", filters))
 
     def test_delete_cleans_original_and_indexes_without_affecting_other_documents(self) -> None:
         first = self.upload_csv(source_relative_path="资料/first.csv").json()["document_id"]

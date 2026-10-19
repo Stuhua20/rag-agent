@@ -47,7 +47,7 @@ backend/tests/test_document_uploads.py
 
 - 前端：在 frontend 目录执行 `pnpm build`、`pnpm test:upload`。后者使用 Node 原生 TypeScript 去类型能力，Node 需支持 `--experimental-strip-types` 和全局 File。
 - 后端：在 backend 目录执行 `../.venv/bin/python -m unittest discover -s tests -v`。
-- 前端 4 项队列测试和后端 15 项测试通过，生产构建包含 TypeScript 检查；冒烟脚本通过。回归包含历史等级字段不影响检索及统计、Sheet 筛选保持有效、自定义存储目录下的删除清理及文件占用后重试。
+- 前端 4 项队列测试和后端 15 项测试通过，生产构建包含 TypeScript 检查；冒烟脚本通过。回归包含历史等级字段不影响检索、Sheet 筛选保持有效、自定义存储目录下的删除清理及文件占用后重试。
 - 使用现有 Edge 和 Playwright，在 1440×1000、390×844 下验证了 8 组交互：目录选择与过滤、真实入库、限速传输进度、解析及停止恢复、失败重试、网络待核对、多文件拖拽及改名、移动布局及键盘操作。
 - 页面身份、非空页面、框架错误遮罩、控制台与页面异常、截图及交互状态检查通过。
 - 新清单行为另通过 9 组桌面/移动浏览器回归：未提交、跳过、成功、失败及停止后重新打开均清空，进行中恢复与系统选择取消保留当前任务；独立上传页行为一致。

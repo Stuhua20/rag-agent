@@ -25,7 +25,6 @@ from app.services.json_store_service import DEFAULT_SETTINGS, json_store
 from app.services.llm_service import llm_service
 from app.services.query_understanding_service import query_understanding_service
 from app.services.retrieval_service import retrieval_service
-from app.services.table_analysis_service import table_analysis_service
 
 
 def check_defaults_and_validation() -> None:
@@ -104,10 +103,8 @@ def check_query_expansion() -> None:
         llm_service.generate_answer = original_generate
 
     original_search = retrieval_service.search_multiple
-    original_analysis = table_analysis_service.analyze
     captured_queries = []
     try:
-        table_analysis_service.analyze = lambda *args, **kwargs: None
         retrieval_service.search_multiple = lambda queries, **kwargs: captured_queries.extend(queries) or []
         chat_service._prepare_retrieval(
             "收入是多少？",
@@ -124,7 +121,6 @@ def check_query_expansion() -> None:
         assert captured_queries == ["收入是多少？", "What is the revenue?"]
     finally:
         retrieval_service.search_multiple = original_search
-        table_analysis_service.analyze = original_analysis
 
 
 def check_bilingual_query_expansion() -> None:
@@ -196,136 +192,6 @@ def check_multilingual_full_scan() -> None:
         retrieval_service.search = original_search
 
 
-def check_deterministic_table_analysis() -> None:
-    original_data_dir = json_store.data_dir
-    try:
-        with tempfile.TemporaryDirectory(prefix="p0-analysis-") as temp_dir:
-            json_store.data_dir = Path(temp_dir)
-            json_store.initialize()
-            json_store.write_json(
-                "documents.json",
-                [
-                    {
-                        "id": "doc-test",
-                        "file_name": "sales.csv",
-                        "status": "indexed",
-                    }
-                ],
-            )
-            json_store.write_json(
-                "chunks.json",
-                [
-                    {
-                        "id": "chunk-test-1",
-                        "document_id": "doc-test",
-                        "sheet_id": "sheet-test",
-                        "sheet_name": "sales",
-                        "row_start": 2,
-                        "row_end": 3,
-                        "columns": ["地区", "客户", "销售额"],
-                        "content": (
-                            "文件：sales.csv\n"
-                            "Sheet：sales\n"
-                            "行 2：地区=上海；客户=甲公司；销售额=120000\n"
-                            "行 3：地区=上海；客户=乙公司；销售额=76000"
-                        ),
-                        "metadata": {},
-                    },
-                    {
-                        "id": "chunk-test-2",
-                        "document_id": "doc-test",
-                        "sheet_id": "sheet-test",
-                        "sheet_name": "sales",
-                        "row_start": 3,
-                        "row_end": 4,
-                        "columns": ["地区", "客户", "销售额"],
-                        "content": (
-                            "文件：sales.csv\n"
-                            "Sheet：sales\n"
-                            "行 3：地区=上海；客户=乙公司；销售额=76000\n"
-                            "行 4：地区=北京；客户=甲公司；销售额=97000"
-                        ),
-                        "metadata": {},
-                    },
-                ],
-            )
-
-            total = table_analysis_service.analyze(
-                "销售额总计", "summary", {"sheet_name": "sales"}
-            )
-            assert total is not None
-            assert "293000" in total["answer"]
-            assert total["chunk_ids"] == ["chunk-test-1", "chunk-test-2"]
-
-            sources, deterministic_answer, retrieval_state = chat_service._prepare_retrieval(
-                "销售额总计",
-                {
-                    "intent": "summary",
-                    "sub_queries": ["销售额总计"],
-                    "filters": {"sheet_name": "sales"},
-                    "retrieval": {"top_k": None, "need_full_scan": False},
-                },
-                3,
-                {"sheet_name": "sales"},
-            )
-            assert deterministic_answer == total["answer"]
-            assert len(sources) == 2
-            assert all(source["score_type"] == "exact_match" for source in sources)
-            assert retrieval_state == {
-                "full_scan_required": True,
-                "full_scan_complete": True,
-                "deterministic": True,
-            }
-
-            ranking = table_analysis_service.analyze(
-                "销售额最高的客户", "ranking", {"sheet_name": "sales"}
-            )
-            assert ranking is not None
-            assert "甲公司" in ranking["answer"]
-            assert "217000" in ranking["answer"]
-
-            json_store.write_json(
-                "documents.json",
-                [
-                    {
-                        "id": "doc-en",
-                        "file_name": "revenue.csv",
-                        "status": "indexed",
-                    }
-                ],
-            )
-            json_store.write_json(
-                "chunks.json",
-                [
-                    {
-                        "id": "chunk-en-1",
-                        "document_id": "doc-en",
-                        "sheet_id": "sheet-en",
-                        "sheet_name": "revenue",
-                        "row_start": 2,
-                        "row_end": 3,
-                        "content": (
-                            "文件：revenue.csv\n"
-                            "Sheet：revenue\n"
-                            "行 2：Region=Shanghai；Revenue=120\n"
-                            "行 3：Region=Beijing；Revenue=80"
-                        ),
-                        "metadata": {},
-                    }
-                ],
-            )
-            bilingual_total = table_analysis_service.analyze(
-                "收入总计是多少？",
-                "summary",
-                query_variants=["What is the total revenue?"],
-            )
-            assert bilingual_total is not None
-            assert "Revenue合计为 200" in bilingual_total["answer"]
-            assert bilingual_total["chunk_ids"] == ["chunk-en-1"]
-    finally:
-        json_store.data_dir = original_data_dir
-
-
 def check_vector_count_guard() -> None:
     original_embed_batch = embedding_service.embed_batch
     try:
@@ -389,7 +255,6 @@ def main() -> None:
     check_query_expansion()
     check_bilingual_query_expansion()
     check_multilingual_full_scan()
-    check_deterministic_table_analysis()
     check_vector_count_guard()
     check_upload_limit_and_cleanup()
     check_chat_service_wiring()

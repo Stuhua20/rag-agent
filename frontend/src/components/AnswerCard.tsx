@@ -3,6 +3,7 @@ import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "../types/chat";
 import { answerContent, groupSources } from "../utils/answerPresentation";
 import ChatIcon from "./ChatIcon";
+import AgentProgress from "./AgentProgress";
 
 type Props = {
   message: ChatMessage;
@@ -17,6 +18,7 @@ export default function AnswerCard({ message, activeSourceId, panelId, onSelectS
 
   return (
     <article className="answer-card">
+      <AgentProgress message={message} />
       <div className="answer-card-body">
         {content ? (
           <ReactMarkdown

@@ -12,9 +12,10 @@ type Props = {
   scopeControls?: ReactNode;
   emptyState?: ReactNode;
   onSend: (question: string) => Promise<boolean>;
+  onStop?: () => void;
 };
 
-export default function ChatWindow({ messages, loading, disabled, scopeControls, emptyState, onSend }: Props) {
+export default function ChatWindow({ messages, loading, disabled, scopeControls, emptyState, onSend, onStop }: Props) {
   const panelId = useId();
   const [selection, setSelection] = useState<{ messageId: string; chunkId: string } | null>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
@@ -37,7 +38,7 @@ export default function ChatWindow({ messages, loading, disabled, scopeControls,
         }} onCloseSources={closeSources} />
         <div className="chat-composer">
           {scopeControls}
-          <MessageInput disabled={disabled} generating={loading} onSend={onSend} />
+          <MessageInput disabled={disabled} generating={loading} onSend={onSend} onStop={onStop} />
         </div>
       </div>
       {selectedSource && activeSource && <SourceEvidencePanel id={panelId} sources={sources} selected={selectedSource} onSelect={(chunkId) => setSelection({ messageId: activeSource.messageId, chunkId })} onClose={closeSources} />}

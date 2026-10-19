@@ -42,7 +42,7 @@ def check_evidence_gate() -> None:
         "甲公司和乙公司销售额对比",
         {"intent": "comparison"},
         [source],
-        {"full_scan_required": True, "full_scan_complete": True, "deterministic": False},
+        {"full_scan_required": True, "full_scan_complete": True},
     )
     assert comparison["passed"]
     assert comparison["evidence_units"] == 2
@@ -51,7 +51,7 @@ def check_evidence_gate() -> None:
         "销售额排名",
         {"intent": "ranking"},
         [source],
-        {"full_scan_required": True, "full_scan_complete": False, "deterministic": False},
+        {"full_scan_required": True, "full_scan_complete": False},
     )
     assert not incomplete["passed"]
     assert "完整计算范围" in incomplete["reason"]
@@ -60,23 +60,15 @@ def check_evidence_gate() -> None:
         "月度销售额趋势",
         {"intent": "trend"},
         [make_source("行 2：月份=2025-01；销售额=120000")],
-        {"full_scan_required": True, "full_scan_complete": True, "deterministic": False},
+        {"full_scan_required": True, "full_scan_complete": True},
     )
     assert not one_record["passed"]
-
-    deterministic = answer_quality_service.evaluate_evidence(
-        "销售额排名",
-        {"intent": "ranking"},
-        [make_source("行 2：客户=甲公司；销售额=120000", score=1.0)],
-        {"full_scan_required": True, "full_scan_complete": True, "deterministic": True},
-    )
-    assert deterministic["passed"]
 
     no_source = answer_quality_service.evaluate_evidence(
         "库存是多少",
         {"intent": "lookup"},
         [],
-        {"full_scan_required": False, "full_scan_complete": None, "deterministic": False},
+        {"full_scan_required": False, "full_scan_complete": None},
     )
     assert not no_source["passed"]
 
@@ -84,7 +76,7 @@ def check_evidence_gate() -> None:
         "甲公司销售额是多少",
         {"intent": "lookup"},
         [make_source("行 2：客户=甲公司；销售额=120000", score=0.01)],
-        {"full_scan_required": False, "full_scan_complete": None, "deterministic": False},
+        {"full_scan_required": False, "full_scan_complete": None},
     )
     assert not weak_match["passed"]
 
@@ -92,7 +84,7 @@ def check_evidence_gate() -> None:
         "请帮我比较一下甲公司和乙公司的销售额",
         {"intent": "comparison"},
         [make_source("说明：甲公司销售额120000元；乙公司销售额76000元。")],
-        {"full_scan_required": True, "full_scan_complete": True, "deterministic": False},
+        {"full_scan_required": True, "full_scan_complete": True},
     )
     assert single_source_comparison["passed"]
     assert answer_quality_service._comparison_targets("哪个客户的销售额更高") == []
@@ -100,14 +92,14 @@ def check_evidence_gate() -> None:
         "哪个客户的销售额更高",
         {"intent": "comparison"},
         [source],
-        {"full_scan_required": True, "full_scan_complete": True, "deterministic": False},
+        {"full_scan_required": True, "full_scan_complete": True},
     )
     assert generic_comparison["passed"]
     missing_comparison_target = answer_quality_service.evaluate_evidence(
         "比较甲公司和乙公司销售额",
         {"intent": "comparison"},
         [make_source("说明：甲公司销售额120000元。")],
-        {"full_scan_required": True, "full_scan_complete": True, "deterministic": False},
+        {"full_scan_required": True, "full_scan_complete": True},
     )
     assert not missing_comparison_target["passed"]
 
@@ -171,10 +163,10 @@ def check_answer_verifier() -> None:
     assert internal_reference["passed"]
     assert "来源1" not in internal_reference["answer"]
 
-    deterministic = answer_quality_service.verify_answer(
-        "销售额合计为196000元。", "销售额合计是多少？", [source], deterministic=True
+    unsupported_number = answer_quality_service.verify_answer(
+        "销售额合计为196000元。", "销售额合计是多少？", [source]
     )
-    assert deterministic["passed"]
+    assert not unsupported_number["passed"]
 
     marker_prompt = "规则中提到【用户问题】标记。\n\n【用户问题】\n甲公司销售额是多少？"
     assert llm_service._extract_after(marker_prompt, "【用户问题】") == "甲公司销售额是多少？"
@@ -197,13 +189,11 @@ def run_chat_check(*, incomplete: bool, stream: bool = False) -> dict:
     retrieval_state = {
         "full_scan_required": incomplete,
         "full_scan_complete": not incomplete if incomplete else None,
-        "deterministic": False,
     }
     service = ChatService()
     llm_calls = []
     service._prepare_retrieval = lambda question, query_plan, top_k, filters: (  # type: ignore[method-assign]
         [source],
-        None,
         retrieval_state,
     )
     query_understanding_service.plan = lambda question, context, metadata, filters: plan

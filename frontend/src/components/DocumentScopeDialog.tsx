@@ -119,8 +119,8 @@ export default function DocumentScopeDialog({ scope, onApply, onClose }: Props) 
               <div className="scope-file-list">
                 {visible.length === 0 && <p className="scope-empty">{documents.length ? "没有匹配的文档" : "还没有上传文档，请先到文件库上传。"}</p>}
                 {visible.map((file) => (
-                  <label key={file.id} className={`scope-file${file.status !== "indexed" ? " unavailable" : ""}`}>
-                    <input type="checkbox" aria-label={`选择 ${file.source_relative_path || file.file_name}`} checked={selected.has(file.id)} disabled={saving || file.status !== "indexed"} onChange={() => toggle(file.id)} />
+                  <label key={file.id} className={`scope-file${!validIds.has(file.id) ? " unavailable" : ""}`}>
+                    <input type="checkbox" aria-label={`选择 ${file.source_relative_path || file.file_name}`} checked={selected.has(file.id)} disabled={saving || !validIds.has(file.id)} onChange={() => toggle(file.id)} />
                     <span className="scope-file-info"><strong>{file.file_name}</strong><small>{file.file_type.toUpperCase()} · {file.source_relative_path || file.original_name}</small></span>
                     <span className="scope-file-status">{STATUS_LABELS[file.status] ?? "处理中"}</span>
                   </label>

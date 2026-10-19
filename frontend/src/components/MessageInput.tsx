@@ -4,6 +4,7 @@ type Props = {
   disabled?: boolean;
   generating?: boolean;
   onSend: (question: string) => Promise<boolean>;
+  onStop?: () => void;
 };
 
 function resizeTextarea(textarea: HTMLTextAreaElement) {
@@ -13,7 +14,7 @@ function resizeTextarea(textarea: HTMLTextAreaElement) {
   textarea.style.overflowY = height > 180 ? "auto" : "hidden";
 }
 
-export default function MessageInput({ disabled = false, generating = false, onSend }: Props) {
+export default function MessageInput({ disabled = false, generating = false, onSend, onStop }: Props) {
   const [value, setValue] = useState("");
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
@@ -129,9 +130,9 @@ export default function MessageInput({ disabled = false, generating = false, onS
         />
         {value && <span className="composer-count">{value.length} 字</span>}
       </div>
-      <button type="submit" disabled={disabled || generating || !value.trim()}>
+      {generating && onStop ? <button type="button" onClick={onStop}>停止</button> : <button type="submit" disabled={disabled || generating || !value.trim()}>
         {generating ? "生成中..." : "发送"}
-      </button>
+      </button>}
       <p id={hintId} className="composer-hint"><span>Enter 发送 · Shift + Enter 换行</span>{generating && <span role="status">回答生成中，可先编辑下一条问题</span>}</p>
     </form>
   );

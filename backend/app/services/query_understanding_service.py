@@ -4,6 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from app.services.llm_service import llm_service
+from app.agents.budget import BudgetExceeded, RunCancelled
 
 
 PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
@@ -42,6 +43,8 @@ class QueryUnderstandingService:
             return self._normalize_plan(
                 plan, fallback, metadata or {}, user_filters, conversation_context=conversation_context
             )
+        except (BudgetExceeded, RunCancelled):
+            raise
         except Exception:
             # 即使查询规划模型不可用，也尝试用轻量翻译扩展保留跨语言召回能力。
             return self._normalize_plan(
@@ -328,6 +331,8 @@ class QueryUnderstandingService:
                 "{queries}", json.dumps(queries, ensure_ascii=False, indent=2)
             )
             translations = self._parse_json_array(llm_service.generate_answer(prompt))
+        except (BudgetExceeded, RunCancelled):
+            raise
         except Exception:
             return []
 

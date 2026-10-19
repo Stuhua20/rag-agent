@@ -1,10 +1,12 @@
 import json
 from collections.abc import Generator
 from functools import lru_cache
+from threading import RLock
 
 from fastapi import HTTPException
 
 from app.schemas.conversation import DocumentScope
+from app.core.config import settings
 from pathlib import Path
 
 from app.services.answer_quality_service import answer_quality_service
@@ -14,7 +16,6 @@ from app.services.knowledge_metadata_service import knowledge_metadata_service
 from app.services.llm_service import llm_service
 from app.services.query_understanding_service import query_understanding_service
 from app.services.retrieval_service import retrieval_service
-from app.services.table_analysis_service import table_analysis_service
 from app.utils.id_utils import new_id
 from app.utils.time_utils import utc_now_iso
 
@@ -28,7 +29,63 @@ def _load_prompt(file_path: str) -> str:
 
 
 class ChatService:
-    def ask(
+    def __init__(self) -> None:
+        self._agent_runtime = None
+        self._run_store = None
+        from app.services.run_coordinator import RunCoordinator
+        self.coordinator = RunCoordinator()
+        self._runtime_lock = RLock()
+
+    def run_store(self):
+        with self._runtime_lock:
+            if self._run_store is None:
+                from app.services.agent_run_store import AgentRunStore
+                self._run_store = AgentRunStore(json_store.data_dir / "agent")
+            return self._run_store
+
+    def agent_runtime(self):
+        with self._runtime_lock:
+            if self._agent_runtime is None:
+                from app.agents.knowledge_qa.runtime import KnowledgeQARuntime
+                self._agent_runtime = KnowledgeQARuntime(self)
+            return self._agent_runtime
+
+    def close(self) -> None:
+        for stream in list(self.coordinator.streams.values()):
+            stream.close()
+        if self._agent_runtime is not None:
+            self._agent_runtime.close()
+            self._agent_runtime = None
+        if self._run_store is not None:
+            self._run_store.close()
+            self._run_store = None
+
+    def ask(self, question: str, conversation_id: str | None = None, top_k: int | None = None,
+            filters: dict | None = None, expected_scope_revision: int | None = None,
+            _conversation: dict | None = None) -> dict:
+        if settings.chat_runtime == "legacy":
+            conversation = _conversation or self.prepare_conversation(conversation_id, question, expected_scope_revision)
+            return self._ask_legacy(question, conversation_id, top_k, filters, expected_scope_revision, conversation)
+        stream = self.ask_stream(question, conversation_id, top_k, filters, expected_scope_revision, _conversation)
+        try:
+            for event in stream:
+                if event["event"] == "error":
+                    raise HTTPException(status_code=500, detail=event["data"]["message"])
+                if event["event"] == "done":
+                    return event["data"]
+            raise HTTPException(status_code=500, detail="Agent 未返回完整结果。")
+        finally:
+            stream.close()
+
+    def ask_stream(self, question: str, conversation_id: str | None = None, top_k: int | None = None,
+                   filters: dict | None = None, expected_scope_revision: int | None = None,
+                   _conversation: dict | None = None):
+        conversation = _conversation or self.prepare_conversation(conversation_id, question, expected_scope_revision)
+        if settings.chat_runtime == "legacy":
+            return self._ask_stream_legacy(question, conversation_id, top_k, filters, expected_scope_revision, conversation)
+        return self.agent_runtime().open_stream(question, conversation, top_k, filters)
+
+    def _ask_legacy(
         self,
         question: str,
         conversation_id: str | None = None,
@@ -57,7 +114,7 @@ class ChatService:
         if query_plan.get("needs_clarification"):
             return self._clarification_response(conversation, question, query_plan)
         resolved_question = query_plan.get("resolved_question") or question
-        sources, deterministic_answer, retrieval_state = self._prepare_retrieval(
+        sources, retrieval_state = self._prepare_retrieval(
             resolved_question, query_plan, top_k, filters
         )
         evidence_report = answer_quality_service.evaluate_evidence(
@@ -66,21 +123,16 @@ class ChatService:
         evidence_fallback = evidence_report.pop("fallback_answer")
 
         if evidence_report["passed"]:
-            draft_answer = (
-                deterministic_answer
-                if deterministic_answer is not None
-                else llm_service.generate_answer(
-                    self._build_prompt(
-                        question, sources, query_plan, conversation_context, evidence_report=evidence_report,
-                    ),
-                    system_prompt=_load_prompt("system/base.md"),
-                )
+            draft_answer = llm_service.generate_answer(
+                self._build_prompt(
+                    question, sources, query_plan, conversation_context, evidence_report=evidence_report,
+                ),
+                system_prompt=_load_prompt("system/base.md"),
             )
             verification = answer_quality_service.verify_answer(
                 draft_answer,
                 resolved_question,
                 sources,
-                deterministic=deterministic_answer is not None,
                 original_question=question,
             )
             answer = verification.pop("answer")
@@ -104,7 +156,7 @@ class ChatService:
 
         return {"conversation_id": conversation["id"], "answer": answer, "sources": sources, "quality": quality}
 
-    def ask_stream(
+    def _ask_stream_legacy(
         self,
         question: str,
         conversation_id: str | None = None,
@@ -139,7 +191,7 @@ class ChatService:
             }}
             return
         resolved_question = query_plan.get("resolved_question") or question
-        sources, deterministic_answer, retrieval_state = self._prepare_retrieval(
+        sources, retrieval_state = self._prepare_retrieval(
             resolved_question, query_plan, top_k, filters
         )
 
@@ -162,22 +214,18 @@ class ChatService:
                 "issues": [],
             }
         else:
-            if deterministic_answer is not None:
-                draft_answer = deterministic_answer
-            else:
-                prompt = self._build_prompt(
-                    question, sources, query_plan, conversation_context, evidence_report=evidence_report,
-                )
-                for text in llm_service.generate_answer_stream(prompt, system_prompt=_load_prompt("system/base.md")):
-                    if text:
-                        answer_chunks.append(text)
-                        yield {"event": "delta", "data": {"text": text}}
-                draft_answer = "".join(answer_chunks)
+            prompt = self._build_prompt(
+                question, sources, query_plan, conversation_context, evidence_report=evidence_report,
+            )
+            for text in llm_service.generate_answer_stream(prompt, system_prompt=_load_prompt("system/base.md")):
+                if text:
+                    answer_chunks.append(text)
+                    yield {"event": "delta", "data": {"text": text}}
+            draft_answer = "".join(answer_chunks)
             verification = answer_quality_service.verify_answer(
                 draft_answer,
                 resolved_question,
                 sources,
-                deterministic=deterministic_answer is not None,
                 original_question=question,
             )
             answer = verification.pop("answer")
@@ -229,7 +277,7 @@ class ChatService:
         query_plan: dict,
         top_k: int | None,
         filters: dict | None,
-    ) -> tuple[list[dict], str | None, dict]:
+    ) -> tuple[list[dict], dict]:
         question = query_plan.get("resolved_question") or question
         sub_queries = query_plan.get("sub_queries") or [question]
         retrieval_queries = query_plan.get("retrieval_queries") or sub_queries
@@ -243,22 +291,6 @@ class ChatService:
         dynamic_top_k = top_k or planned_top_k or self._determine_top_k(intent, top_k)
 
         full_scan = query_understanding_service.needs_full_scan(question, query_plan)
-        analysis = table_analysis_service.analyze(
-            question,
-            intent,
-            merged_filters,
-            query_variants=retrieval_queries,
-        )
-        if analysis:
-            sources = retrieval_service.sources_for_chunk_ids(
-                analysis["chunk_ids"], limit=dynamic_top_k, document_ids=merged_filters.get("document_ids"),
-            )
-            return sources, analysis["answer"], {
-                "full_scan_required": True,
-                "full_scan_complete": True,
-                "deterministic": True,
-            }
-
         sources = retrieval_service.search_multiple(
             retrieval_queries,
             top_k=dynamic_top_k,
@@ -266,15 +298,13 @@ class ChatService:
             full_scan=full_scan,
         )
         if full_scan and len(sources) > retrieval_service.full_scan_max_chunks():
-            return sources[:dynamic_top_k], None, {
+            return sources[:dynamic_top_k], {
                 "full_scan_required": True,
                 "full_scan_complete": False,
-                "deterministic": False,
             }
-        return sources, None, {
+        return sources, {
             "full_scan_required": full_scan,
             "full_scan_complete": True if full_scan else None,
-            "deterministic": False,
         }
 
     def _determine_top_k(self, intent: str, default_top_k: int | None) -> int:
@@ -385,6 +415,19 @@ class ChatService:
         ]
 
     def delete_conversation(self, conversation_id: str) -> bool:
+        self.coordinator.cancel(conversation_id)
+        if self._agent_runtime is not None:
+            self._agent_runtime.cancel_conversation(conversation_id)
+        deleted = self._delete_conversation_locked(conversation_id)
+        if self._run_store and conversation_id not in self.coordinator.active:
+            self._run_store.delete_conversation(conversation_id)
+        return deleted
+
+    def _delete_conversation_locked(self, conversation_id: str) -> bool:
+        with json_store._lock:
+            return self._delete_conversation_records(conversation_id)
+
+    def _delete_conversation_records(self, conversation_id: str) -> bool:
         deleted = json_store.delete_item("conversations.json", conversation_id)
         if not deleted:
             return False
@@ -412,7 +455,7 @@ class ChatService:
         content: str,
         sources: list[dict],
         quality: dict | None = None,
-        *, scope_context: dict | None = None,
+        *, scope_context: dict | None = None, run_id: str | None = None, status: str | None = None,
     ) -> dict:
         message = {
             "id": new_id("msg"),
@@ -427,6 +470,10 @@ class ChatService:
             message["scope_revision"] = scope_context.get("scope_revision", 0)
         if quality is not None:
             message["quality"] = quality
+        if run_id is not None:
+            message["run_id"] = run_id
+            message["status"] = status
+            return json_store.add_run_message(message)
         return json_store.add_item("messages.json", message)
 
     def _touch_conversation(self, conversation_id: str) -> None:

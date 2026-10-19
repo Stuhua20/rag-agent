@@ -1,0 +1,59 @@
+[
+  {
+    "question": "今年销售额合计",
+    "request_time": "2026-01-01T00:30:00+09:00",
+    "understanding": {
+      "tasks": [
+        {
+          "task_id": "t1",
+          "kind": "table",
+          "goal": "计算2026年度（2026-01-01至2026-12-31，按请求时区+09:00）的销售额合计值；当前未提供附件或表结构，需在可用数据中识别销售额字段并汇总。",
+          "quote": "今年销售额合计",
+          "blocked_reason": null
+        }
+      ],
+      "followup": false,
+      "changes": [],
+      "clarification_question": null
+    },
+    "range_explicit": true
+  },
+  {
+    "question": "去年销售额合计",
+    "request_time": "2025-12-31T07:30:00-08:00",
+    "understanding": {
+      "tasks": [
+        {
+          "task_id": "t1",
+          "kind": "table",
+          "goal": "计算去年即2024-01-01至2024-12-31（按用户时区）的销售额合计。",
+          "quote": "去年销售额合计",
+          "blocked_reason": null
+        }
+      ],
+      "followup": false,
+      "changes": [],
+      "clarification_question": null
+    },
+    "range_explicit": true
+  },
+  {
+    "question": "上月销售额合计",
+    "request_time": "2026-01-01T00:30:00+09:00",
+    "understanding": {
+      "tasks": [
+        {
+          "task_id": "t1",
+          "kind": "table",
+          "goal": "统计2025年12月1日至2025年12月31日（上月）期间的销售额合计。",
+          "quote": "上月销售额合计",
+          "blocked_reason": null
+        }
+      ],
+      "followup": false,
+      "changes": [],
+      "clarification_question": null
+    },
+    "range_explicit": true
+  }
+]

@@ -14,9 +14,13 @@ MANAGED_PROMPTS = (
     "query/translator.md",
     "rag/answer.md",
     "rag/no_source.md",
+    "agent/replan.md",
+    "agent/evidence_coverage.md",
 )
 MANAGED_PROMPT_SET = frozenset(MANAGED_PROMPTS)
 REQUIRED_PLACEHOLDERS = {
+    "agent/replan.md": ("{requirements}", "{executed_queries}"),
+    "agent/evidence_coverage.md": ("{requirements}", "{evidence}"),
     "query/planner.md": ("{conversation_context}", "{metadata}", "{question}"),
     "query/translator.md": ("{target_language}", "{queries}"),
     "rag/answer.md": (

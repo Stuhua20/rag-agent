@@ -1,0 +1,11 @@
+.agent-progress { margin: 0 0 12px; color: #64748b; font-size: 12px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+.agent-progress summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; list-style: none; }
+.agent-progress summary::-webkit-details-marker { display: none; }
+.agent-progress summary:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; border-radius: 10px; }
+.agent-progress-dot { width: 6px; height: 6px; flex-shrink: 0; background: #64748b; border-radius: 50%; }
+.agent-progress.is-running .agent-progress-dot { background: #2563eb; }
+.agent-progress-hint { margin-left: auto; font-size: 11px; color: #94a3b8; white-space: nowrap; }
+.agent-progress ol { margin: 0; padding: 0 12px 10px; list-style: none; }
+.agent-progress li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; }
+.agent-progress li.is-active { color: #2563eb; }
+.agent-progress-round { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #e2e8f0; }

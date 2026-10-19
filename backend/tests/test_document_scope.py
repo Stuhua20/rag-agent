@@ -18,7 +18,6 @@ from app.services.knowledge_metadata_service import knowledge_metadata_service
 from app.services.llm_service import llm_service
 from app.services.query_understanding_service import query_understanding_service
 from app.services.retrieval_service import retrieval_service
-from app.services.table_analysis_service import table_analysis_service
 
 
 class DocumentScopeTests(unittest.TestCase):
@@ -114,45 +113,42 @@ class DocumentScopeTests(unittest.TestCase):
             results = list(executor.map(update, [self.selected("b"), {"mode": "all", "document_ids": []}]))
         self.assertCountEqual(results, [1, 409])
 
-    def test_retrieval_rows_metadata_and_citations_obey_scope_even_when_empty(self) -> None:
+    def test_retrieval_metadata_and_citations_obey_scope_even_when_empty(self) -> None:
         for ids in (["a"], ["b"], []):
             with self.subTest(ids=ids):
                 sources = retrieval_service.search_multiple(["销售额", "甲公司"], filters={"document_ids": ids}, full_scan=True)
                 ranked = retrieval_service.search_multiple(["销售额", "甲公司"], filters={"document_ids": ids}, top_k=1)
                 self.assertEqual({item["document_id"] for item in ranked}, set(ids))
                 citations = retrieval_service.sources_for_chunk_ids(["chunk-a", "chunk-b"], document_ids=ids)
-                rows = table_analysis_service._load_rows({"document_ids": ids})
-                for result in (sources, citations, rows):
+                for result in (sources, citations):
                     self.assertEqual({item["document_id"] for item in result}, set(ids))
         metadata = knowledge_metadata_service.snapshot(document_ids=["a"])
         self.assertIn("仅a字段", metadata["headers"])
         self.assertNotIn("仅b字段", metadata["headers"])
         self.assertEqual(knowledge_metadata_service.snapshot(document_ids=[])["file_names"], [])
 
-    def test_model_plan_cannot_override_scope_for_calculations(self) -> None:
-        plan = {"intent": "summary", "sub_queries": ["甲公司销售额合计是多少？"], "filters": {"document_ids": ["b"]}}
-        sources, answer, state = chat_service._prepare_retrieval("甲公司销售额合计是多少？", plan, None, {"document_ids": ["a"]})
-        self.assertTrue(state["deterministic"])
+    def test_model_plan_cannot_override_scope_for_retrieval(self) -> None:
+        plan = {"intent": "lookup", "sub_queries": ["销售额"], "filters": {"document_ids": ["b"]}}
+        sources, state = chat_service._prepare_retrieval("甲公司销售额是多少？", plan, None, {"document_ids": ["a"]})
         self.assertEqual({item["document_id"] for item in sources}, {"a"})
-        self.assertIn("100", answer)
-        self.assertNotIn("900", answer)
-        self.assertNotIn("1000", answer)
+        self.assertTrue(all("900" not in item["content"] for item in sources))
 
-    def test_both_chat_endpoints_calculate_and_save_only_selected_documents(self) -> None:
+    def test_both_chat_endpoints_retrieve_and_save_only_selected_documents(self) -> None:
         for endpoint in ("/api/chat", "/api/chat/stream"):
-            for ids, amount in ((("a",), "100"), (("b",), "900"), (("a", "b"), "1000")):
+            for ids in (("a",), ("b",), ("a", "b")):
                 with self.subTest(endpoint=endpoint, ids=ids):
                     conversation = self.create(*ids)
-                    with patch.object(query_understanding_service, "plan", return_value={"intent": "summary", "sub_queries": ["甲公司销售额合计是多少？"]}), patch.object(llm_service, "generate_answer") as model, patch.object(llm_service, "generate_answer_stream") as stream:
-                        response = self.client.post(endpoint, json={"conversation_id": conversation["id"], "question": "甲公司销售额合计是多少？"})
+                    facts = {"a": "甲公司销售额为100元。", "b": "甲公司销售额为900元。"}
+                    answer = "\n".join(facts[item] for item in ids)
+                    with patch.object(query_understanding_service, "plan", return_value={"intent": "lookup", "sub_queries": ["销售额"]}), patch.object(llm_service, "generate_answer", return_value=answer) as model, patch.object(llm_service, "generate_answer_stream", return_value=iter([answer])) as stream:
+                        response = self.client.post(endpoint, json={"conversation_id": conversation["id"], "question": "所选文档中记载的销售额是多少？"})
                     self.assertEqual(response.status_code, 200, response.text)
                     result = self.events(response)[-1] if endpoint.endswith("stream") else response.json()
-                    self.assertIn(amount, result["answer"])
+                    self.assertEqual(answer, result["answer"])
                     messages = chat_service.list_messages(conversation["id"])
                     self.assertEqual({item["document_id"] for item in messages[-1]["sources"]}, set(ids))
                     self.assertTrue(all(item["document_scope"] == self.selected(*ids) for item in messages))
-                    model.assert_not_called()
-                    stream.assert_not_called()
+                    (stream if endpoint.endswith("stream") else model).assert_called_once()
 
     def test_streaming_model_and_planner_receive_only_selected_evidence(self) -> None:
         conversation = self.create("a")

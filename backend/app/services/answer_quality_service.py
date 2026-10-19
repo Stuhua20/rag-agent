@@ -96,7 +96,6 @@ class AnswerQualityService:
         full_scan_required = bool(retrieval_state.get("full_scan_required", False))
         full_scan_state = retrieval_state.get("full_scan_complete")
         full_scan_complete = None if full_scan_state is None else bool(full_scan_state)
-        deterministic = bool(retrieval_state.get("deterministic", False))
         evidence_units = self._evidence_unit_count(sources)
         missing = []
         comparison_targets = self._comparison_targets(question) if intent == "comparison" else []
@@ -122,8 +121,7 @@ class AnswerQualityService:
             missing.append("引用证据没有覆盖所有被比较对象。")
 
         if (
-            not deterministic
-            and intent in self.COMPLETENESS_INTENTS
+            intent in self.COMPLETENESS_INTENTS
             and evidence_units < self.MINIMUM_EVIDENCE_UNITS
             and not (intent == "comparison" and comparison_targets and not missing_targets)
         ):
@@ -141,7 +139,6 @@ class AnswerQualityService:
             "missing_targets": missing_targets,
             "full_scan_required": full_scan_required,
             "full_scan_complete": full_scan_complete,
-            "deterministic": deterministic,
             "fallback_answer": self._evidence_fallback(intent, sources, missing),
         }
 
@@ -151,7 +148,6 @@ class AnswerQualityService:
         question: str,
         sources: list[dict],
         *,
-        deterministic: bool = False,
         original_question: str | None = None,
     ) -> dict:
         verified_answer = str(answer or "").strip()
@@ -211,7 +207,7 @@ class AnswerQualityService:
             )
 
         unsupported_numbers = []
-        if not deterministic and sources:
+        if sources:
             question_numbers = self._numbers_in_text(user_question)
             supported_numbers = set(question_numbers)
             evidence_rows = []
