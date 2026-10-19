@@ -32,3 +32,6 @@ backend/data/*
 
 # Local generated outputs
 /outputs/
+
+# Local sample files
+/samples/
