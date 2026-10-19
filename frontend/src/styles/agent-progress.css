@@ -9,3 +9,7 @@
 .agent-progress li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; }
 .agent-progress li.is-active { color: #2563eb; }
 .agent-progress-round { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #e2e8f0; }
+.agent-review-summary { padding: 0 12px 10px; border-top: 1px solid #e2e8f0; }
+.agent-review-summary p { margin: 8px 0 4px; }
+.agent-review-summary ul { margin: 0; padding-left: 18px; }
+.agent-review-summary li { display: list-item; overflow-wrap: anywhere; }

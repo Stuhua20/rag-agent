@@ -1,11 +1,19 @@
 import re
+import logging
 from collections import defaultdict
+
+import faiss
+import numpy as np
 
 from app.core.config import settings
 from app.services.embedding_service import embedding_service
 from app.services.json_store_service import json_store
 from app.utils.similarity import cosine_similarity
 from app.agents.budget import BudgetExceeded, RunCancelled, check_budget
+from app.services.retrieval_index_service import IndexSnapshot, VectorSearchUnavailable, retrieval_index_service, tokenize
+
+
+logger = logging.getLogger(__name__)
 
 
 QUESTION_WORDS = (
@@ -27,6 +35,133 @@ QUESTION_WORDS = (
 
 class RetrievalService:
     def search(
+        self, question: str, top_k: int | None = None, filters: dict | None = None,
+        full_scan: bool = False,
+    ) -> list[dict]:
+        return self.search_multiple([question], top_k=top_k, filters=filters, full_scan=full_scan)
+
+    def search_multiple(
+        self, queries: list[str], top_k: int | None = None, filters: dict | None = None,
+        full_scan: bool = False,
+    ) -> list[dict]:
+        with json_store._lock:
+            config = self._get_config()
+            version = retrieval_index_service.version()
+        if config["engine"] == "legacy":
+            sources = self._legacy_search_multiple(queries, top_k, filters, full_scan)
+            retrieval_index_service.assert_current(version)
+            return sources
+        snapshot = retrieval_index_service.get(filters)
+        retrieval_index_service.assert_current(version)
+        normalized = list(dict.fromkeys(str(query).strip() for query in (queries or []) if str(query).strip())) or [""]
+        limit = top_k or config["top_k"]
+        candidates = min(len(snapshot.chunks), max(20, 3 * limit))
+        primary_language = self._query_language(normalized[0])
+        merged = {}
+        for query in normalized:
+            check_budget()
+            results = self._search_snapshot(query, snapshot, config, candidates, full_scan)
+            weight = self._query_weight(primary_language, self._query_language(query))
+            for source in results:
+                source["score"] = round(source["score"] * weight, 8)
+                chunk_id = source["chunk_id"]
+                previous = merged.get(chunk_id)
+                if previous is None or (source["is_relevant"], source["score"]) > (previous["is_relevant"], previous["score"]):
+                    merged[chunk_id] = source
+        retrieval_index_service.assert_current(snapshot.version)
+        sources = sorted(merged.values(), key=lambda item: (
+            -int(item["is_relevant"]) if full_scan else 0, -item["score"], item["chunk_id"],
+        ))
+        if full_scan:
+            return sources
+        if config["max_chunks_per_doc"] > 0:
+            sources = self._limit_per_document(sources, config["max_chunks_per_doc"])
+        return sources[:limit]
+
+    def _search_snapshot(
+        self, question: str, snapshot: IndexSnapshot, config: dict, candidates: int, full_scan: bool,
+    ) -> list[dict]:
+        if not snapshot.chunks:
+            return []
+        mode = config["search_mode"]
+        bm25_scores, vector_scores = {}, {}
+        bm25_rows, vector_rows = [], []
+        reason = ""
+        if mode != "vector" and snapshot.bm25 is not None:
+            terms = tokenize(question)
+            scores = snapshot.bm25.get_scores(terms)
+            matching = [row for row, tokens in enumerate(snapshot.tokens) if tokens.intersection(terms)]
+            bm25_scores = {row: float(scores[row]) for row in matching}
+            bm25_rows = sorted(matching, key=lambda row: (-bm25_scores[row], snapshot.chunks[row]["id"]))
+            if not full_scan:
+                bm25_rows = bm25_rows[:candidates]
+        if mode != "keyword":
+            if snapshot.incompatible_chunks:
+                reason = "部分片段缺少兼容向量，需要重新索引；关键词检索仍可使用。"
+            try:
+                if snapshot.vector_index is None:
+                    raise ValueError("当前范围没有兼容的向量，请重新索引文档。")
+                query = np.asarray(embedding_service.embed_text(question), dtype="float32")
+                if (query.ndim != 1 or query.size != snapshot.dimension
+                        or not np.isfinite(query).all() or np.linalg.norm(query) == 0):
+                    raise ValueError("查询向量维度或数值无效，请检查 Embedding 配置并重新索引。")
+                query = np.ascontiguousarray(query.reshape(1, -1))
+                faiss.normalize_L2(query)
+                count = len(snapshot.vector_rows) if full_scan else min(candidates, len(snapshot.vector_rows))
+                distances, indices = snapshot.vector_index.search(query, count)
+                for score, index in zip(distances[0], indices[0]):
+                    if index >= 0:
+                        row = snapshot.vector_rows[int(index)]
+                        vector_scores[row] = float(score)
+                vector_rows = sorted((row for row, score in vector_scores.items() if score >= config["score_threshold"]),
+                                     key=lambda row: (-vector_scores[row], snapshot.chunks[row]["id"]))
+            except (BudgetExceeded, RunCancelled):
+                raise
+            except Exception as exc:
+                if mode == "vector":
+                    logger.warning("Vector retrieval unavailable (%s)", type(exc).__name__)
+                    raise VectorSearchUnavailable("向量检索不可用，请检查 Embedding 服务或重新索引文档。") from None
+                # Do not include API errors or credentials in citation metadata/logs.
+                reason = "向量检索不可用，本次已降级为 BM25 关键词检索。"
+                logger.warning("Hybrid retrieval degraded to BM25 (%s)", type(exc).__name__)
+        bm25_ranks = {row: rank for rank, row in enumerate(bm25_rows, 1)}
+        vector_ranks = {row: rank for rank, row in enumerate(vector_rows, 1)}
+        selected = range(len(snapshot.chunks)) if full_scan else set(bm25_rows) | set(vector_rows)
+        sources = []
+        for row in selected:
+            check_budget()
+            chunk = snapshot.chunks[row]
+            methods = (["bm25"] if row in bm25_ranks else []) + (["faiss"] if row in vector_ranks else [])
+            if mode == "keyword":
+                score, score_type = bm25_scores.get(row, 0.0), "bm25"
+            elif mode == "vector":
+                score, score_type = vector_scores.get(row, 0.0), "similarity"
+            else:
+                score = sum(1.0 / (60 + ranks[row]) for ranks in (bm25_ranks, vector_ranks) if row in ranks)
+                score_type = "rrf"
+            source = self._source_from_chunk(
+                chunk, chunk.get("metadata", {}), snapshot.embeddings.get(chunk["id"], {}), score, [], set(),
+                vector_score=vector_scores.get(row, 0.0), keyword_score=0.0, score_type=score_type,
+            )
+            source.update(score=round(score, 8), retrieval_engine="bm25_faiss", is_relevant=bool(methods),
+                          retrieval_methods=methods, bm25_score=bm25_scores.get(row),
+                          bm25_rank=bm25_ranks.get(row), vector_rank=vector_ranks.get(row))
+            if reason:
+                source["retrieval_warning"] = reason
+            sources.append(source)
+        return sources
+
+    def is_relevant_source(self, source: dict) -> bool:
+        if "is_relevant" in source:
+            return source["is_relevant"] is True
+        if source.get("score_type") == "exact_match":
+            return True
+        try:
+            return float(source.get("score", 0) or 0) >= self.score_threshold()
+        except (TypeError, ValueError):
+            return False
+
+    def _legacy_search(
         self,
         question: str,
         top_k: int | None = None,
@@ -100,6 +235,8 @@ class RetrievalService:
         settings_json = json_store.read_json("settings.json")
         retrieval_settings = settings_json.get("retrieval", {}) if isinstance(settings_json, dict) else {}
         return {
+            "engine": retrieval_settings.get("engine", "bm25_faiss")
+            if retrieval_settings.get("engine", "bm25_faiss") in {"bm25_faiss", "legacy"} else "bm25_faiss",
             "top_k": self._as_int(retrieval_settings.get("top_k"), settings.default_top_k, 1),
             "score_threshold": self._as_float(
                 retrieval_settings.get("score_threshold"), settings.default_score_threshold, 0.0, 1.0
@@ -145,7 +282,7 @@ class RetrievalService:
                 doc_count[doc_id] += 1
         return result
 
-    def search_multiple(
+    def _legacy_search_multiple(
         self,
         queries: list[str],
         top_k: int | None = None,
@@ -160,7 +297,7 @@ class RetrievalService:
             str(query).strip() for query in (queries or []) if str(query).strip()
         )) or [""]
         if len(normalized_queries) == 1:
-            return self.search(
+            return self._legacy_search(
                 normalized_queries[0],
                 top_k=limit,
                 filters=filters,
@@ -174,7 +311,7 @@ class RetrievalService:
         for query in normalized_queries:
             query_language = self._query_language(query)
             query_weight = self._query_weight(primary_language, query_language)
-            sources = self.search(
+            sources = self._legacy_search(
                 query,
                 top_k=limit,
                 filters=filters,

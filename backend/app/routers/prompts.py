@@ -16,9 +16,13 @@ MANAGED_PROMPTS = (
     "rag/no_source.md",
     "agent/replan.md",
     "agent/evidence_coverage.md",
+    "agent/evidence_review.md",
+    "agent/evidence_repair.md",
 )
 MANAGED_PROMPT_SET = frozenset(MANAGED_PROMPTS)
 REQUIRED_PLACEHOLDERS = {
+    "agent/evidence_review.md": ("{review_input}",),
+    "agent/evidence_repair.md": ("{repair_input}",),
     "agent/replan.md": ("{requirements}", "{executed_queries}"),
     "agent/evidence_coverage.md": ("{requirements}", "{evidence}"),
     "query/planner.md": ("{conversation_context}", "{metadata}", "{question}"),

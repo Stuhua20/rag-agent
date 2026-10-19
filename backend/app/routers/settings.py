@@ -27,9 +27,10 @@ def update_settings(payload: SettingsPayload) -> dict:
     updates = payload.model_dump(exclude_none=True, exclude_unset=True)
     secrets = updates.pop("secrets", {})
     env_service.update_secrets(secrets)
-    current = _merge_defaults(json_store.read_json("settings.json"))
-    merged = _deep_merge(current, updates)
-    json_store.write_json("settings.json", merged)
+    with json_store._lock:
+        current = _merge_defaults(json_store.read_json("settings.json"))
+        merged = _deep_merge(current, updates)
+        json_store.write_json("settings.json", merged)
     return {**_merge_defaults(merged), "secrets": env_service.configured_flags()}
 
 

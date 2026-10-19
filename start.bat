@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 chcp 65001 >nul
-title Distributor-RAG Startup
+title KnowLoop Startup
 
 set "ROOT_DIR=%~dp0"
 set "VENV_DIR=%ROOT_DIR%.venv"
@@ -12,7 +12,7 @@ set "ENV_EXAMPLE_FILE=%ROOT_DIR%backend\.env.example"
 set "PYTHON_CMD="
 
 echo ========================================
-echo   Distributor-RAG startup
+echo   KnowLoop startup
 echo ========================================
 echo.
 
@@ -96,7 +96,7 @@ if not exist "%ENV_FILE%" (
 )
 
 echo [INFO] 正在启动后端：http://127.0.0.1:8000
-start "Distributor-RAG Backend" /D "%ROOT_DIR%backend" cmd /k ""%VENV_PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port 8000"
+start "KnowLoop Backend" /D "%ROOT_DIR%backend" cmd /k ""%VENV_PYTHON%" -m uvicorn app.main:app --host 127.0.0.1 --port 8000"
 
 where pnpm >nul 2>&1
 if errorlevel 1 (
@@ -119,7 +119,7 @@ if not exist "%ROOT_DIR%frontend\node_modules" (
 )
 
 echo [INFO] 正在启动前端：http://127.0.0.1:5173
-start "Distributor-RAG Frontend" /D "%ROOT_DIR%frontend" cmd /k "pnpm run dev --host 127.0.0.1 --port 5173"
+start "KnowLoop Frontend" /D "%ROOT_DIR%frontend" cmd /k "pnpm run dev --host 127.0.0.1 --port 5173"
 
 echo.
 echo [OK] 后端和前端已启动。

@@ -64,7 +64,12 @@ def delete_document(document_id: str) -> dict[str, bool]:
 
 
 @router.post("/{document_id}/reindex")
-def reindex_document(document_id: str) -> dict[str, str]:
+def reindex_document(document_id: str) -> dict:
     if not document_pipeline.get_document(document_id):
         raise HTTPException(status_code=404, detail="Document not found")
-    raise HTTPException(status_code=501, detail="Reindex is not implemented in phase three.")
+    try:
+        return document_pipeline.reindex_document(document_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail="重新索引失败，原有索引数据已保留。") from error

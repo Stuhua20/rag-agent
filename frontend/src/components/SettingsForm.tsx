@@ -106,7 +106,7 @@ export default function SettingsForm() {
               value={settings.embedding.model}
               onChange={(event) => setSettings({ ...settings, embedding: { ...settings.embedding, model: event.target.value } })}
             />
-            <small className="field-hint">用于生成向量的模型名称</small>
+            <small className="field-hint">更换模型、服务地址或 Mock 模式后，请在文件库的更多操作中重新索引已有文件</small>
           </label>
           <label className="span-2">
             <span>API Key</span>
@@ -211,6 +211,17 @@ export default function SettingsForm() {
         </div>
         <div className="settings-fields">
           <label>
+            <span>检索引擎</span>
+            <select
+              value={settings.retrieval.engine ?? "bm25_faiss"}
+              onChange={(event) => setSettings({ ...settings, retrieval: { ...settings.retrieval, engine: event.target.value as "bm25_faiss" | "legacy" } })}
+            >
+              <option value="bm25_faiss">BM25 + FAISS（默认）</option>
+              <option value="legacy">原检索引擎（兼容回退）</option>
+            </select>
+            <small className="field-hint">双路召回后融合排序；需要对比或回退时可选择原引擎</small>
+          </label>
+          <label>
             <span>检索模式</span>
             <select
               value={settings.retrieval.search_mode}
@@ -220,7 +231,7 @@ export default function SettingsForm() {
               <option value="vector">纯向量检索</option>
               <option value="keyword">纯关键词检索</option>
             </select>
-            <small className="field-hint">混合检索同时用语义和关键词召回，效果最稳</small>
+            <small className="field-hint">混合检索结合关键词与语义召回；新引擎使用 RRF 融合排名</small>
           </label>
           <label>
             <span>Top K</span>
@@ -229,19 +240,24 @@ export default function SettingsForm() {
               value={settings.retrieval.top_k}
               onChange={(event) => setSettings({ ...settings, retrieval: { ...settings.retrieval, top_k: Number(event.target.value) } })}
             />
-            <small className="field-hint">每次检索召回最相似的前 K 个文本片段</small>
+            <small className="field-hint">融合、去重及文档数量限制后，最多返回 K 个片段</small>
           </label>
           <label>
-            <span>Score Threshold</span>
+            <span>{settings.retrieval.engine === "legacy" ? "相关性阈值" : "向量相似度阈值"}</span>
             <input
               type="number"
               step="0.01"
+              min="0"
+              max="1"
+              disabled={settings.retrieval.engine !== "legacy" && settings.retrieval.search_mode === "keyword"}
               value={settings.retrieval.score_threshold}
               onChange={(event) =>
                 setSettings({ ...settings, retrieval: { ...settings.retrieval, score_threshold: Number(event.target.value) } })
               }
             />
-            <small className="field-hint">相似度低于该值的片段会被过滤，0 表示不过滤</small>
+            <small className="field-hint">{settings.retrieval.engine === "legacy"
+              ? "沿用原引擎的评分阈值，0 表示不过滤"
+              : "仅过滤向量召回；BM25 和 RRF 排名分数不使用此阈值"}</small>
           </label>
           <label>
             <span>每文档最大 Chunk 数</span>

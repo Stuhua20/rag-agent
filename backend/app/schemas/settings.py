@@ -19,6 +19,7 @@ class LlmSettingsPayload(BaseModel):
 
 
 class RetrievalSettingsPayload(BaseModel):
+    engine: Literal["bm25_faiss", "legacy"] | None = None
     top_k: int | None = Field(default=None, ge=1, le=50)
     chunk_size: int | None = Field(default=None, ge=1, le=100_000)
     overlap: int | None = Field(default=None, ge=0, le=100_000)

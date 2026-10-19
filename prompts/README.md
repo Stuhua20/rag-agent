@@ -11,6 +11,8 @@
 - `rag/no_source.md`：没有检索结果时直接返回的固定回复，不发送给 LLM。
 - `agent/replan.md`：针对缺失证据生成最多三个补查查询，真实模型模式按需使用。
 - `agent/evidence_coverage.md`：多任务语义覆盖检查，要求返回证据 ID 和可逐字核对的摘录。
+- `agent/evidence_review.md`：生成后逐答案单元、逐任务审查，代码核对完整性、证据 ID 与原文摘录。
+- `agent/evidence_repair.md`：仅依据原有证据和问题清单修订一次，修订后重新核验。
 
 
 ## 变量契约
@@ -21,6 +23,8 @@
 - `rag/no_source.md`：无变量
 - `agent/replan.md`：`{requirements}`、`{executed_queries}`
 - `agent/evidence_coverage.md`：`{requirements}`、`{evidence}`
+- `agent/evidence_review.md`：`{review_input}`
+- `agent/evidence_repair.md`：`{repair_input}`
 
 ## 共同约定
 

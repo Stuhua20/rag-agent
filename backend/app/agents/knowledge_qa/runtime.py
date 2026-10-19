@@ -12,6 +12,8 @@ from app.agents.budget import RunBudget, RunCancelled
 from app.core.config import settings
 from app.services.json_store_service import json_store
 from app.services.agent_run_store import AgentRunStore
+from app.services.llm_service import llm_service
+from app.services.retrieval_index_service import IndexChanged, VectorSearchUnavailable, retrieval_index_service
 from app.utils.id_utils import new_id
 
 
@@ -34,6 +36,7 @@ class RunContext:
     steps: list[dict] = field(default_factory=list)
     sources_emitted: bool = False
     delta_emitted: bool = False
+    retrieval_version: tuple = field(default_factory=retrieval_index_service.version)
 
     def check(self, *, check_budget: bool = True) -> None:
         if self.budget.cancelled.is_set():
@@ -41,6 +44,7 @@ class RunContext:
         if check_budget:
             self.budget.check()
         with json_store._lock:
+            retrieval_index_service.assert_current(self.retrieval_version)
             if json_store.get_item("conversations.json", self.conversation["id"]) is None:
                 raise RunCancelled("会话已删除。")
             current = {item["id"]: json.dumps(item, sort_keys=True, ensure_ascii=False)
@@ -143,16 +147,21 @@ class KnowledgeQARuntime:
                 documents={item["id"]: json.dumps(item, sort_keys=True, ensure_ascii=False) for item in documents},
             )
             context.check()
-            self.store.record(run_id, conversation_id, "running", {"workflow_version": "knowledge-qa-v1"})
+            review_mode = ("disabled" if not settings.evidence_review_enabled
+                           else "mock" if llm_service._get_config()["mock"] else "real")
+            workflow_version = "knowledge-qa-v2" if settings.evidence_review_enabled else "knowledge-qa-v1"
+            self.store.record(run_id, conversation_id, "running", {"workflow_version": workflow_version, "review_mode": review_mode})
             history = self.service.list_messages(conversation_id)
             self.service._add_message(conversation_id, "user", question, [], scope_context=conversation, run_id=run_id)
             # History is loaded in the understand node; exclude this run's user message there.
             initial = {
-                "run_id": run_id, "conversation_id": conversation_id, "workflow_version": "knowledge-qa-v1",
+                "run_id": run_id, "conversation_id": conversation_id, "workflow_version": workflow_version,
                 "original_question": question, "resolved_question": question, "document_scope": scope,
                 "scope_revision": conversation.get("scope_revision", 0), "allowed_document_ids": list(context.documents),
                 "sources": [], "round": 0, "no_growth": 0, "executed_actions": [], "query_plan": {},
                 "status": "running", "halted": False,
+                "review_mode": review_mode, "revision_round": 0, "review_history": [], "rule_history": [],
+                "review_report": {"mode": review_mode, "status": "skipped", "passed": None, "reason": "not_generated"},
             }
             context.history = history
             yield {"event": "run_started", "data": {"run_id": run_id, "conversation_id": conversation_id}}
@@ -192,9 +201,10 @@ class KnowledgeQARuntime:
                         for item in self.service.list_messages(conversation_id))
             status = "needs_reconciliation" if saved else "cancelled" if isinstance(exc, RunCancelled) else "failed"
             self.store.record(run_id, conversation_id, status, {"reason": type(exc).__name__})
-            message = str(exc) if isinstance(exc, (DocumentChanged, RunCancelled)) else "本轮处理已中断，请重试。"
+            message = str(exc) if isinstance(exc, (DocumentChanged, IndexChanged, VectorSearchUnavailable, RunCancelled)) else "本轮处理已中断，请重试。"
             yield {"event": "error", "data": {"run_id": run_id, "message": message,
-                                              "code": "document_changed" if isinstance(exc, DocumentChanged) else status}}
+                                              "code": "document_changed" if isinstance(exc, (DocumentChanged, IndexChanged))
+                                              else "retrieval_unavailable" if isinstance(exc, VectorSearchUnavailable) else status}}
         finally:
             if graph_stream is not None:
                 graph_stream.close()

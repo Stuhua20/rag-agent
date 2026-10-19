@@ -34,6 +34,13 @@ class EmbeddingService:
     def embedding_model(self) -> str:
         return self._get_config()["model"]
 
+    def profile(self) -> dict:
+        """Non-secret identity of the vector space; API keys never enter indexes."""
+        config = self._get_config()
+        return {key: config[key] for key in ("provider", "base_url", "model", "mock")} | {
+            "dim": config["dim"] if config["mock"] else None,
+        }
+
     def _get_config(self) -> dict:
         settings_json = json_store.read_json("settings.json")
         embedding_settings = settings_json.get("embedding", {}) if isinstance(settings_json, dict) else {}

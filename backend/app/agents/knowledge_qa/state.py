@@ -27,3 +27,10 @@ class KnowledgeQAState(TypedDict, total=False):
     status: str
     quality: dict
     halted: bool
+    review_mode: str
+    draft_answer: str
+    revision_round: int
+    review_report: dict
+    review_history: list[dict]
+    rule_history: list[dict]
+    repair_issues: list[str]

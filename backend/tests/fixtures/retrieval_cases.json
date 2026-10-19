@@ -1,0 +1,31 @@
+{
+  "note": "Synthetic authored examples; expected documents are design labels, not independent ground truth.",
+  "documents": [
+    {"id": "payment", "file_name": "采购合同.csv", "sheet_name": "付款条款", "columns": ["客户", "结算条件"], "text": "甲公司采购合同规定：货物验收合格后，买方应在三十天内支付全部款项。合同编号为 ZX-2026-019。"},
+    {"id": "warranty", "file_name": "设备合同.docx", "sheet_name": "售后保障", "columns": [], "text": "乙公司设备自验收之日起保修二十四个月。保修期间供应商应免费维修非人为损坏。"},
+    {"id": "confidentiality", "file_name": "NDA.docx", "sheet_name": "Confidentiality", "columns": [], "text": "The recipient shall not disclose confidential information to third parties without prior written consent. The confidentiality obligation survives termination for three years."},
+    {"id": "invoice", "file_name": "invoice-register.xlsx", "sheet_name": "发票登记", "columns": ["发票编号", "开票金额"], "text": "发票编号 INV-2026-007，开票金额为人民币 12500 元，采购方为丙公司。"},
+    {"id": "delivery", "file_name": "供货协议.docx", "sheet_name": "交货安排", "columns": [], "text": "丁公司订购的货物应在订单确认后十五个工作日内运达上海仓库，运输费用由卖方承担。"},
+    {"id": "budget", "file_name": "研发预算.xlsx", "sheet_name": "经费管理", "columns": ["项目编号", "预算上限"], "text": "研发项目 RD-2026-008 的预算上限为人民币五十万元，超预算支出必须经项目负责人审批。"},
+    {"id": "leave", "file_name": "员工手册.pdf", "sheet_name": "休假制度", "columns": [], "text": "员工提交年假申请后，须经部门负责人批准。连续工作满一年且不满十年的员工享有五天年假。"},
+    {"id": "coffee", "file_name": "办公用品.csv", "sheet_name": "库存", "columns": ["物品", "数量"], "text": "办公室咖啡豆库存为二十袋，打印纸库存为十箱，每周五盘点。"}
+  ],
+  "queries": [
+    {"question": "ZX-2026-019", "relevant": ["payment"]},
+    {"question": "甲公司付款条款", "relevant": ["payment"]},
+    {"question": "When must the buyer pay after acceptance?", "relevant": ["payment"]},
+    {"question": "乙公司设备保修多久？", "relevant": ["warranty"]},
+    {"question": "How long is the equipment warranty?", "relevant": ["warranty"]},
+    {"question": "保密信息能否未经同意披露给第三方？", "relevant": ["confidentiality"]},
+    {"question": "confidentiality obligation after termination", "relevant": ["confidentiality"]},
+    {"question": "INV-2026-007", "relevant": ["invoice"]},
+    {"question": "丁公司货物送到哪里？", "relevant": ["delivery"]},
+    {"question": "Who pays the shipping cost?", "relevant": ["delivery"]},
+    {"question": "RD-2026-008", "relevant": ["budget"]},
+    {"question": "经费管理 预算上限", "relevant": ["budget"]},
+    {"question": "年假申请由谁批准？", "relevant": ["leave"]},
+    {"question": "咖啡豆库存", "relevant": ["coffee"]},
+    {"question": "火星探测器采用什么燃料？", "relevant": []},
+    {"question": "What is the capital of Iceland?", "relevant": []}
+  ]
+}

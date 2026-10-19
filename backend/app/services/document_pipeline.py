@@ -1,4 +1,5 @@
 from pathlib import Path
+import math
 
 from fastapi import UploadFile
 
@@ -67,20 +68,14 @@ class DocumentPipeline:
             parse_warnings = parsed.get("warnings", [])
 
             sheet_records = self._create_sheet_records(document_id, cleaned)
-            existing_sheets = json_store.list_items("sheets.json")
-            json_store.write_json("sheets.json", [*existing_sheets, *sheet_records])
 
             json_store.update_item("documents.json", document_id, {"status": "chunking", "updated_at": utc_now_iso()})
             sheet_ids = {sheet["sheet_name"]: sheet["id"] for sheet in sheet_records}
             current_document = json_store.get_item("documents.json", document_id) or document
             chunks = self.chunker.chunk_workbook(cleaned, current_document, sheet_ids)
-            existing_chunks = json_store.list_items("chunks.json")
-            json_store.write_json("chunks.json", [*existing_chunks, *chunks])
 
             json_store.update_item("documents.json", document_id, {"status": "embedding", "updated_at": utc_now_iso()})
             embeddings = self._create_embeddings(chunks)
-            existing_embeddings = json_store.list_items("embeddings.json")
-            json_store.write_json("embeddings.json", [*existing_embeddings, *embeddings])
 
             row_count = sum(sheet["row_count"] for sheet in sheet_records)
             column_count = max((sheet["column_count"] for sheet in sheet_records), default=0)
@@ -93,7 +88,7 @@ class DocumentPipeline:
                 "parse_warnings": parse_warnings,
                 "updated_at": utc_now_iso(),
             }
-            final_document = json_store.update_item("documents.json", document_id, updates)
+            final_document = self._publish(document_id, sheet_records, chunks, embeddings, updates)
             return {
                 "document_id": document_id,
                 "status": final_document["status"] if final_document else "indexed",
@@ -139,17 +134,69 @@ class DocumentPipeline:
         return {"items": chunks[start:end], "total": len(chunks), "page": page, "page_size": page_size}
 
     def delete_document(self, document_id: str) -> bool:
-        document = self.get_document(document_id)
-        if not document:
-            return False
-        storage_path = settings.storage_dir / Path(document.get("storage_path", "")).name
-        if storage_path.exists() and storage_path.is_file():
-            storage_path.unlink()
-        for file_name in ("sheets.json", "chunks.json", "embeddings.json"):
-            items = [item for item in json_store.list_items(file_name) if item.get("document_id") != document_id]
-            json_store.write_json(file_name, items)
-        json_store.delete_item("documents.json", document_id)
-        return True
+        with json_store._lock:
+            document = self.get_document(document_id)
+            if not document:
+                return False
+            collections = {name: [item for item in json_store.list_items(name)
+                                  if item.get("document_id") != document_id]
+                           for name in ("sheets.json", "chunks.json", "embeddings.json")}
+            collections["documents.json"] = [item for item in json_store.list_items("documents.json")
+                                             if item["id"] != document_id]
+            storage_path = settings.storage_dir / Path(document.get("storage_path", "")).name
+            original = storage_path.read_bytes() if storage_path.is_file() else None
+            if original is not None:
+                storage_path.unlink()
+            try:
+                json_store.write_batch(collections)
+            except BaseException:
+                if original is not None:
+                    storage_path.write_bytes(original)
+                raise
+            return True
+
+    def reindex_document(self, document_id: str) -> dict:
+        """Build replacement artifacts first; keep old indexed data usable on failure."""
+        with json_store._lock:
+            document = self.get_document(document_id)
+            if document is None:
+                raise ValueError("文档不存在。")
+            options = self.chunker._chunk_options(None, None)
+            profile = embedding_service.profile()
+        path = settings.storage_dir / Path(document["storage_path"]).name
+        parsed = self._parse_file(path, document["file_type"], document_id, document["file_name"])
+        cleaned = self.cleaner.clean_workbook(parsed)
+        sheets = self._create_sheet_records(document_id, cleaned)
+        chunks = self.chunker.chunk_workbook(cleaned, document, {item["sheet_name"]: item["id"] for item in sheets},
+                                             chunk_size=options[0], overlap=options[1])
+        embeddings = self._create_embeddings(chunks)
+        updates = {"status": "indexed", "error_message": None, "sheet_count": len(sheets),
+                   "chunk_count": len(chunks), "row_count": sum(item["row_count"] for item in sheets),
+                   "column_count": max((item["column_count"] for item in sheets), default=0),
+                   "parse_warnings": parsed.get("warnings", []), "updated_at": utc_now_iso()}
+        with json_store._lock:
+            if self.chunker._chunk_options(None, None) != options or embedding_service.profile() != profile:
+                raise ValueError("索引配置已变更，请重新执行索引。")
+            self._publish(document_id, sheets, chunks, embeddings, updates, expected=document)
+        return {"document_id": document_id, "status": "indexed", "chunk_count": len(chunks), "sheet_count": len(sheets)}
+
+    def _publish(self, document_id: str, sheets: list[dict], chunks: list[dict], embeddings: list[dict],
+                 updates: dict, expected: dict | None = None) -> dict:
+        with json_store._lock:
+            current = self.get_document(document_id)
+            if current is None or (expected is not None and current != expected):
+                raise ValueError("文档已变更或删除，请重试。")
+            if any(item.get("embedding_profile") != embedding_service.profile() for item in embeddings):
+                raise ValueError("Embedding 配置已变更，请重新索引。")
+            updated = {**current, **updates, "index_revision": new_id("rev")}
+            collections = {}
+            for name, replacements in (("sheets.json", sheets), ("chunks.json", chunks), ("embeddings.json", embeddings)):
+                collections[name] = [item for item in json_store.list_items(name)
+                                     if item.get("document_id") != document_id] + replacements
+            collections["documents.json"] = [updated if item["id"] == document_id else item
+                                             for item in json_store.list_items("documents.json")]
+            json_store.write_batch(collections)
+            return updated
 
     def _parse_file(self, path: Path, file_type: str, document_id: str, file_name: str) -> dict:
         if file_type == "csv":
@@ -178,13 +225,10 @@ class DocumentPipeline:
                 output.write(chunk)
 
     def _cleanup_document_artifacts(self, document_id: str, storage_path: Path) -> None:
-        for file_name in ("sheets.json", "chunks.json", "embeddings.json"):
-            items = [
-                item
-                for item in json_store.list_items(file_name)
-                if item.get("document_id") != document_id
-            ]
-            json_store.write_json(file_name, items)
+        with json_store._lock:
+            json_store.write_batch({name: [item for item in json_store.list_items(name)
+                                           if item.get("document_id") != document_id]
+                                   for name in ("sheets.json", "chunks.json", "embeddings.json")})
         storage_path.unlink(missing_ok=True)
 
     def _create_sheet_records(self, document_id: str, workbook: dict) -> list[dict]:
@@ -207,7 +251,12 @@ class DocumentPipeline:
         return records
 
     def _create_embeddings(self, chunks: list[dict]) -> list[dict]:
+        if not chunks:
+            return []
+        profile = embedding_service.profile()
         vectors = embedding_service.embed_batch([chunk["content"] for chunk in chunks])
+        if embedding_service.profile() != profile:
+            raise ValueError("Embedding 配置已变更，请重新索引。")
         if len(vectors) != len(chunks):
             raise ValueError(
                 f"Embedding response count mismatch: expected {len(chunks)}, received {len(vectors)}."
@@ -216,8 +265,10 @@ class DocumentPipeline:
         dimensions = {len(vector) for vector in vectors}
         if any(dimension == 0 for dimension in dimensions) or len(dimensions) > 1:
             raise ValueError("Embedding response contains empty or inconsistent vector dimensions.")
+        if any(not all(math.isfinite(value) for value in vector) or not any(vector) for vector in vectors):
+            raise ValueError("Embedding response contains non-finite or zero vectors.")
 
-        model = embedding_service.embedding_model()
+        model = profile["model"]
         now = utc_now_iso()
         return [
             {
@@ -225,6 +276,7 @@ class DocumentPipeline:
                 "document_id": chunk["document_id"],
                 "sheet_id": chunk["sheet_id"],
                 "embedding_model": model,
+                "embedding_profile": profile,
                 "vector": vector,
                 "metadata": chunk.get("metadata", {}),
                 "created_at": now,

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from app.routers import prompts as prompt_routes
@@ -149,3 +149,16 @@ class AnswerPromptIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EvidencePromptContracts(unittest.TestCase):
+    def test_review_and_repair_require_their_input_placeholders(self) -> None:
+        for name, variable in (("agent/evidence_review.md", "{review_input}"),
+                               ("agent/evidence_repair.md", "{repair_input}")):
+            with self.subTest(name=name):
+                self.assertIn(name, prompt_routes.MANAGED_PROMPTS)
+                text = (prompt_routes.PROMPTS_DIR / name).read_text(encoding="utf-8")
+                prompt_routes._validate_prompt_content(name, text)
+                with self.assertRaises(HTTPException) as error:
+                    prompt_routes._validate_prompt_content(name, text.replace(variable, ""))
+                self.assertEqual(error.exception.status_code, 400)

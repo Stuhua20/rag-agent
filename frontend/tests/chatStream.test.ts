@@ -64,3 +64,30 @@ test("UTF-8 decoding across byte boundaries retains Chinese content", () => {
   assert.equal(results[0].answer, "付款条件");
 });
 
+
+test("reviewed result retains both review rounds and never needs a draft event", () => {
+  const { parser, deltas, events, results } = setup();
+  const review = { mode: "real", status: "passed", passed: true, revision_round: 1,
+    history: [{ units: [{ issues: ["恢复审批条件"] }] }, { units: [{ issues: [] }] }] };
+  for (const step of ["evidence_review:1:0", "repair:1:0", "evidence_review:1:1"]) {
+    parser.push(`event: step_started\ndata: ${JSON.stringify({ step_id: step, label: "审查证据" })}\n\n`);
+    parser.push(`event: step_done\ndata: ${JSON.stringify({ step_id: step, label: "审查证据" })}\n\n`);
+  }
+  assert.deepEqual(deltas, []);
+  parser.push(`event: done\ndata: ${JSON.stringify({ conversation_id: "c", answer: "经审批后可以借用。",
+    run_id: "r", status: "answered", sources: [], quality: { evidence_review: review } })}\n\n`);
+  parser.finish();
+  assert.equal(new Set(events.map((event) => event.step_id)).size, 3);
+  assert.deepEqual(results[0].quality?.evidence_review, review);
+});
+
+for (const status of ["review_unavailable", "budget_exceeded"]) {
+  test(`${status} remains an explicit incomplete review`, () => {
+    const { parser, results } = setup();
+    parser.push(`event: done\ndata: ${JSON.stringify({ conversation_id: "c", answer: "未能完成核验。", status,
+      quality: { evidence_review: { mode: "real", status: "incomplete", passed: null } } })}\n\n`);
+    parser.finish();
+    assert.equal(results[0].status, status);
+    assert.equal(results[0].quality?.evidence_review?.passed, null);
+  });
+}

@@ -12,7 +12,7 @@ class Settings:
         self.backend_dir = Path(__file__).resolve().parents[2]
         if load_dotenv:
             load_dotenv(self.backend_dir / ".env")
-        self.app_name = os.getenv("APP_NAME", "Excel RAG JSON Pipeline")
+        self.app_name = os.getenv("APP_NAME", "KnowLoop")
         self.app_env = os.getenv("APP_ENV", "development")
         self.backend_host = os.getenv("BACKEND_HOST", "0.0.0.0")
         self.backend_port = int(os.getenv("BACKEND_PORT", "8000"))
@@ -42,6 +42,10 @@ class Settings:
         self.agent_max_seconds = max(1, float(os.getenv("AGENT_MAX_SECONDS", "180")))
         self.agent_max_llm_calls = max(1, int(os.getenv("AGENT_MAX_LLM_CALLS", "8")))
         self.agent_max_tool_calls = max(1, int(os.getenv("AGENT_MAX_TOOL_CALLS", "8")))
+        self.evidence_review_enabled = os.getenv("EVIDENCE_REVIEW_ENABLED", "true").strip().lower() == "true"
+        self.evidence_review_max_revisions = int(os.getenv("EVIDENCE_REVIEW_MAX_REVISIONS", "1"))
+        if self.evidence_review_max_revisions not in {0, 1}:
+            raise ValueError("EVIDENCE_REVIEW_MAX_REVISIONS must be 0 or 1")
 
     def _resolve_path(self, value: str) -> Path:
         path = Path(value)

@@ -105,10 +105,8 @@ class AnswerQualityService:
         if not sources:
             missing.append("没有检索到可引用的知识库证据。")
         else:
-            minimum_score = retrieval_service.score_threshold()
             has_relevant_source = any(
-                source.get("score_type") == "exact_match"
-                or self._as_float(source.get("score")) >= minimum_score
+                retrieval_service.is_relevant_source(source)
                 for source in sources
             )
             if not has_relevant_source:
@@ -149,6 +147,7 @@ class AnswerQualityService:
         sources: list[dict],
         *,
         original_question: str | None = None,
+        preserve_draft: bool = False,
     ) -> dict:
         verified_answer = str(answer or "").strip()
         issues = []
@@ -209,7 +208,7 @@ class AnswerQualityService:
         unsupported_numbers = []
         if sources:
             question_numbers = self._numbers_in_text(user_question)
-            supported_numbers = set(question_numbers)
+            supported_numbers = set() if preserve_draft else set(question_numbers)
             evidence_rows = []
             for source in sources:
                 supported_numbers.update(self._numbers_in_text(str(source.get("content") or "")))
@@ -228,7 +227,7 @@ class AnswerQualityService:
                     if (normalized := self._normalize_entity(entity))
                 ]
                 for value, normalized in self._number_values(line):
-                    if normalized in question_numbers:
+                    if not preserve_draft and normalized in question_numbers:
                         continue
                     if normalized not in supported_numbers:
                         unsupported_numbers.append(value)
@@ -254,7 +253,7 @@ class AnswerQualityService:
         return {
             "passed": passed,
             "issues": issues,
-            "answer": verified_answer if passed else self._verification_fallback(issues),
+            "answer": verified_answer if passed or preserve_draft else self._verification_fallback(issues),
             "sanitized": any(issue["code"] == "internal_reference_removed" for issue in issues),
         }
 

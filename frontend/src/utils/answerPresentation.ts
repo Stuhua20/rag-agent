@@ -21,6 +21,13 @@ export function sourceLocation(source: SourceItem) {
   return [source.sheet_name, position].filter(Boolean).join(" · ");
 }
 
+export function sourceScoreLabel(source: SourceItem) {
+  if (source.score_type === "exact_match") return "确定性匹配：全量计算命中";
+  if (source.score_type === "rrf") return `融合排序分：${source.score.toFixed(5)}（用于排名）`;
+  if (source.score_type === "bm25") return `关键词得分：${source.score.toFixed(3)}（用于排名）`;
+  return `检索相似度：${source.score.toFixed(3)}`;
+}
+
 export function groupSources(sources: SourceItem[]) {
   const groups = new Map<string, SourceItem[]>();
   for (const source of sources) {

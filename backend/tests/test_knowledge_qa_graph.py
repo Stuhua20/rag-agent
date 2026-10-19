@@ -95,7 +95,9 @@ def test_retired_table_conversation_continues_qa_without_touching_old_data(servi
     with patch.object(query_understanding_service, 'plan', return_value=fixed_plan(question)):
         result = service.ask(question, conversation['id'])
     assert result['status'] == 'answered'
-    assert result['quality']['agent']['workflow_version'] == 'knowledge-qa-v1'
+    assert result['quality']['agent']['workflow_version'] == 'knowledge-qa-v2'
+    assert result['quality']['evidence_review']['mode'] == 'mock'
+    assert result['quality']['evidence_review']['passed'] is None
     assert service.list_messages(conversation['id'])[0] == old_message
     assert archived.read_bytes() == b'archived table data must not be opened or modified'
     assert attachment.read_text() == '编号,金额\n001,10\n'
@@ -463,3 +465,225 @@ def test_acceptance_cases(service, case, monkeypatch):
     assert set(case["evidence"]).issubset({source["chunk_id"] for source in result["sources"]})
     assert {source["document_id"] for source in result["sources"]}.issubset(set(case.get("scope", ["a", "b"])))
     assert result["quality"]["agent"]["retrieval_rounds"] <= 3
+
+
+@pytest.fixture
+def real_review(service, monkeypatch):
+    """Exercise actual model wrappers/budget and actual reviewer validation without network."""
+    config = json_store.read_json("settings.json")
+    config["llm"]["mock"] = False
+    json_store.write_json("settings.json", config)
+    monkeypatch.setattr(settings, "evidence_review_enabled", True)
+    monkeypatch.setattr(settings, "evidence_review_max_revisions", 1)
+    question = "甲公司销售额是多少？"
+    monkeypatch.setattr(query_understanding_service, "plan", lambda *args: fixed_plan(question))
+    control = {"draft": "甲公司销售额为100。", "repair": "甲公司销售额为100。",
+               "statuses": ["supported"], "reviews": [], "repairs": [], "raw": None, "error": None}
+    monkeypatch.setattr(llm_service, "_api_answer_stream", lambda *args: iter([control["draft"]]))
+
+    def api(prompt, *args):
+        if "【审查输入】\n" not in prompt:
+            control["repairs"].append(json.loads(prompt.split("【修订输入：原始问题、当前草稿、证据、问题】\n", 1)[1]))
+            return control["repair"]
+        payload = json.loads(prompt.split("【审查输入】\n", 1)[1])
+        control["reviews"].append(payload)
+        if control["error"]:
+            raise control["error"]
+        if control["raw"] is not None:
+            return control["raw"]
+        statuses = control["statuses"]
+        status = statuses[min(len(control["reviews"]) - 1, len(statuses) - 1)]
+        return json.dumps({
+            "units": [{"unit_id": unit["id"], "status": status,
+                       "evidence_refs": [{"evidence_id": payload["evidence"][0]["id"], "quote": payload["evidence"][0]["text"]}],
+                       "issues": [] if status == "supported" else ["条件与证据不符，请按原文修订"]}
+                      for unit in payload["answer_units"]],
+            "tasks": [{"requirement_id": task["id"], "status": "answered", "reason": "已回应任务",
+                       "answer_unit_ids": [unit["id"] for unit in payload["answer_units"]]}
+                      for task in payload["requirements"]],
+        }, ensure_ascii=False)
+    monkeypatch.setattr(llm_service, "_api_answer", api)
+    return control
+
+
+def test_reviewed_answer_publishes_only_after_review_and_persistence(service, real_review):
+    stream = service.ask_stream("甲公司销售额是多少？")
+    for event in stream:
+        if event["event"] in {"sources", "delta"}:
+            assert len(real_review["reviews"]) == 1
+            assert json_store.list_items("messages.json")[-1]["role"] == "assistant"
+        if event["event"] == "done":
+            result = event["data"]
+    assert result["status"] == "answered"
+    assert result["quality"]["evidence_review"]["passed"] is True
+    assert result["quality"]["agent"]["llm_calls"] == 2
+    assert not real_review["repairs"]
+
+
+def test_semantic_failure_repairs_once_and_rechecks(service, real_review):
+    real_review.update(statuses=["contradicted", "supported"], draft="甲公司无需审批。")
+    result = service.ask("甲公司销售额是多少？")
+    assert result["status"] == "answered"
+    assert result["answer"] == real_review["repair"]
+    assert len(real_review["reviews"]) == 2 and len(real_review["repairs"]) == 1
+    assert real_review["repairs"][0]["draft"] == real_review["draft"]
+    report = result["quality"]["evidence_review"]
+    assert report["revision_round"] == 1 and len(report["history"]) == 2
+    assert len(report["rule_history"]) == 2
+    assert result["quality"]["agent"]["llm_calls"] == 4
+    steps = result["quality"]["agent"]["steps"]
+    reviews = [step for step in steps if step["event"] == "step_started" and step["step_id"].startswith("evidence_review:")]
+    assert len({step["step_id"] for step in reviews}) == 2
+    assert reviews[-1]["label"] == "复核回答"
+
+
+def test_rule_failure_preserves_original_draft_for_repair(service, real_review):
+    real_review["draft"] = "甲公司销售额999。"
+    result = service.ask("甲公司销售额是多少？")
+    assert result["status"] == "answered"
+    assert real_review["repairs"][0]["draft"] == "甲公司销售额999。"
+    assert len(real_review["reviews"]) == 1
+    assert result["quality"]["agent"]["llm_calls"] == 3
+
+
+def test_second_semantic_failure_never_leaks_draft_or_loops(service, real_review):
+    real_review.update(statuses=["contradicted"], draft="甲公司无需审批。", repair="甲公司一定可以申请。")
+    events = list(service.ask_stream("甲公司销售额是多少？"))
+    result = done(events)
+    assert result["status"] == "verification_failed"
+    assert len(real_review["repairs"]) == 1 and len(real_review["reviews"]) == 2
+    assert result["quality"]["evidence_gate"]["passed"] is True
+    assert [item["data"]["text"] for item in events if item["event"] == "delta"] == [result["answer"]]
+    assert "无需审批" not in result["answer"] and "一定可以" not in result["answer"]
+    assert service.list_messages(result["conversation_id"])[-1]["content"] == result["answer"]
+
+
+@pytest.mark.parametrize("failure", ["not-json", '{"units":[],"tasks":[]}', RuntimeError("offline")])
+def test_unavailable_reviewer_never_repairs_or_approves(service, real_review, failure):
+    if isinstance(failure, Exception): real_review["error"] = failure
+    else: real_review["raw"] = failure
+    result = service.ask("甲公司销售额是多少？")
+    assert result["status"] == "review_unavailable"
+    assert result["quality"]["evidence_review"]["passed"] is None
+    assert result["quality"]["evidence_gate"]["passed"] is True
+    assert not real_review["repairs"]
+    assert real_review["draft"] not in result["answer"]
+
+
+def test_zero_revision_setting_stops_after_first_failure(service, real_review, monkeypatch):
+    monkeypatch.setattr(settings, "evidence_review_max_revisions", 0)
+    real_review["statuses"] = ["unsupported"]
+    result = service.ask("甲公司销售额是多少？")
+    assert result["status"] == "verification_failed"
+    assert len(real_review["reviews"]) == 1 and not real_review["repairs"]
+
+
+def test_review_budget_failure_does_not_publish_unreviewed_answer(service, real_review, monkeypatch):
+    monkeypatch.setattr(settings, "agent_max_llm_calls", 1)
+    result = service.ask("甲公司销售额是多少？")
+    assert result["status"] == "budget_exceeded"
+    assert result["quality"]["evidence_review"]["passed"] is None
+    assert result["quality"]["agent"]["llm_calls"] == 0
+    assert not real_review["reviews"]
+
+
+def test_repair_requires_budget_for_both_repair_and_recheck(service, real_review, monkeypatch):
+    monkeypatch.setattr(settings, "agent_max_llm_calls", 3)
+    real_review["statuses"] = ["unsupported"]
+    result = service.ask("甲公司销售额是多少？")
+    assert result["status"] == "budget_exceeded"
+    assert result["quality"]["agent"]["llm_calls"] == 2
+    assert not real_review["repairs"]
+
+
+def test_disabled_review_keeps_original_stream_and_marks_skipped(service, real_review, monkeypatch):
+    monkeypatch.setattr(settings, "evidence_review_enabled", False)
+    result = service.ask("甲公司销售额是多少？")
+    assert result["status"] == "answered" and not real_review["reviews"]
+    assert result["quality"]["evidence_review"]["mode"] == "disabled"
+    assert result["quality"]["evidence_review"]["passed"] is None
+    assert result["quality"]["agent"]["workflow_version"] == "knowledge-qa-v1"
+
+
+def test_document_deleted_during_review_prevents_final_answer(service, real_review, monkeypatch):
+    original = llm_service._api_answer
+    def deleting_reviewer(*args):
+        response = original(*args)
+        json_store.delete_item("documents.json", "a")
+        return response
+    monkeypatch.setattr(llm_service, "_api_answer", deleting_reviewer)
+    events = list(service.ask_stream("甲公司销售额是多少？"))
+    assert events[-1]["event"] == "error"
+    assert events[-1]["data"]["code"] == "document_changed"
+    assert not any(item["event"] in {"delta", "done"} for item in events)
+
+
+def test_question_number_cannot_authorize_a_business_fact(service, real_review):
+    real_review["draft"] = "甲公司销售额999。"
+    question = "甲公司的销售额是999吗？"
+    report = answer_quality_service.verify_answer(real_review["draft"], question,
+        retrieval_service.sources_for_chunk_ids(["chunk-a"]), preserve_draft=True)
+    assert not report["passed"]
+    assert report["answer"] == real_review["draft"]
+
+
+def test_review_deadline_never_publishes_draft(service, real_review, monkeypatch):
+    from app.agents.budget import BudgetExceeded
+    real_review["error"] = BudgetExceeded("time_budget")
+    events = list(service.ask_stream("甲公司销售额是多少？"))
+    result = done(events)
+    assert result["status"] == "budget_exceeded"
+    assert result["quality"]["agent"]["stop_reason"] == "time_budget"
+    assert real_review["draft"] not in result["answer"]
+    assert result["quality"]["evidence_review"]["passed"] is None
+
+
+def test_cancel_during_review_cannot_save_or_publish_answer(service, real_review):
+    from app.agents.budget import RunCancelled
+    real_review["error"] = RunCancelled("cancelled")
+    events = list(service.ask_stream("甲公司销售额是多少？"))
+    assert events[-1]["event"] == "error"
+    assert not any(item["event"] in {"delta", "done"} for item in events)
+    assert [item["role"] for item in json_store.list_items("messages.json")] == ["user"]
+    assert not service.agent_runtime().active
+
+
+def test_failed_repair_does_not_publish_original_draft(service, real_review, monkeypatch):
+    original = llm_service._api_answer
+    real_review["statuses"] = ["unsupported"]
+    def failing_repair(prompt, *args):
+        if "【审查输入】" not in prompt:
+            raise RuntimeError("repair offline")
+        return original(prompt, *args)
+    monkeypatch.setattr(llm_service, "_api_answer", failing_repair)
+    result = service.ask("甲公司销售额是多少？")
+    assert result["status"] == "review_unavailable"
+    assert result["quality"]["agent"]["stop_reason"] == "repair_unavailable"
+    assert real_review["draft"] not in result["answer"]
+
+
+def test_no_revision_rule_failure_does_not_claim_semantic_review(service, real_review, monkeypatch):
+    real_review["draft"] = "甲公司销售额999。"
+    monkeypatch.setattr(settings, "evidence_review_max_revisions", 0)
+    result = service.ask("甲公司销售额是多少？")
+    assert result["status"] == "verification_failed"
+    assert not real_review["reviews"] and not real_review["repairs"]
+    assert result["quality"]["evidence_review"]["passed"] is None
+    assert result["quality"]["evidence_review"]["reason"] == "rule_failed"
+
+
+def test_selected_scope_is_preserved_in_review_and_repair(service, real_review):
+    real_review["statuses"] = ["unsupported", "supported"]
+    conversation = service.create_conversation(document_scope={"mode": "selected", "document_ids": ["a"]})
+    result = service.ask("甲公司销售额是多少？", conversation["id"])
+    assert result["status"] == "answered"
+    assert all({item["id"] for item in payload["evidence"]} == {"chunk-a"} for payload in real_review["reviews"])
+    assert {item["id"] for item in real_review["repairs"][0]["evidence"]} == {"chunk-a"}
+
+
+def test_real_oversized_draft_is_not_silently_truncated_or_published(service, real_review):
+    real_review["draft"] = "设备说明" * 3100
+    result = service.ask("甲公司销售额是多少？")
+    assert result["status"] == "review_unavailable"
+    assert not real_review["reviews"]
+    assert len(result["answer"]) < 300

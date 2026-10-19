@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { deleteDocument, fetchDocuments } from "../api/documents";
+import { deleteDocument, fetchDocuments, reindexDocument } from "../api/documents";
 import ConfirmModal from "../components/ConfirmModal";
 import DocumentTable from "../components/DocumentTable";
 import { useUpload } from "../components/upload/UploadProvider";
@@ -18,6 +18,8 @@ export default function DocumentsPage() {
   const [deleteProgress, setDeleteProgress] = useState<{ completed: number; total: number } | null>(null);
   const [deleteResult, setDeleteResult] = useState<{ succeeded: number; failures: { document: DocumentItem; message: string }[] } | null>(null);
   const deletingRef = useRef(false);
+  const reindexingRef = useRef(false);
+  const [reindexing, setReindexing] = useState<string | null>(null);
   const { open: openUpload, isOpen: uploadOpen, isRunning: uploading, documentRevision } = useUpload();
   const { toast } = useToast();
 
@@ -72,8 +74,25 @@ export default function DocumentsPage() {
     setPendingDelete([document]);
   }
 
+  async function rebuildDocument(document: DocumentItem) {
+    if (deletingRef.current || reindexingRef.current || uploading) return;
+    reindexingRef.current = true;
+    setReindexing(document.file_name);
+    try {
+      await reindexDocument(document.id);
+      if (selected?.id === document.id) setSelected(null);
+      await loadDocuments();
+      toast(`${document.file_name} 已重新索引`, "success");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "重新索引失败，请核对文件状态后重试", "error");
+    } finally {
+      reindexingRef.current = false;
+      setReindexing(null);
+    }
+  }
+
   async function confirmDelete() {
-    if (!pendingDelete.length || deletingRef.current) return;
+    if (!pendingDelete.length || deletingRef.current || reindexingRef.current) return;
     deletingRef.current = true;
     const targets = [...pendingDelete];
     const failures: { document: DocumentItem; message: string }[] = [];
@@ -139,7 +158,7 @@ export default function DocumentsPage() {
               aria-haspopup="dialog"
               aria-expanded={uploadOpen}
               onClick={openUpload}
-              disabled={Boolean(deleteProgress)}
+              disabled={Boolean(deleteProgress) || Boolean(reindexing)}
             >
               上传
             </button>
@@ -173,7 +192,7 @@ export default function DocumentsPage() {
             <button
               type="button"
               className="document-bulk-delete"
-              disabled={!checkedIds.size || Boolean(deleteProgress) || loadingDocuments || uploading}
+              disabled={!checkedIds.size || Boolean(deleteProgress) || Boolean(reindexing) || loadingDocuments || uploading}
               onClick={() => setPendingDelete(visibleDocuments.filter((item) => checkedIds.has(item.id)))}
             >
               {deleteProgress ? `删除中 ${deleteProgress.completed} / ${deleteProgress.total}` : "删除所选"}
@@ -189,6 +208,7 @@ export default function DocumentsPage() {
           </div>
         )}
         {loadingDocuments && <p className="status-text">正在加载文件库...</p>}
+        {reindexing && <p className="status-text" role="status">正在重新索引：{reindexing}，完成前仍可查询原有资料。</p>}
         {loadError && (
           <div className="inline-error" role="alert">
             <span>文件库加载失败：{loadError}</span>
@@ -203,10 +223,11 @@ export default function DocumentsPage() {
             selectedId={selected?.id}
             onSelect={setSelected}
             onDelete={removeDocument}
+            onReindex={(document) => void rebuildDocument(document)}
             checkedIds={checkedIds}
             onToggle={toggleDocument}
             onToggleAll={toggleAll}
-            disabled={Boolean(deleteProgress)}
+            disabled={Boolean(deleteProgress) || Boolean(reindexing) || uploading}
           />
         )}
       </section>

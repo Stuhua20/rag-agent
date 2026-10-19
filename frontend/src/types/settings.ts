@@ -13,6 +13,7 @@ export type AppSettings = {
     mock: boolean;
   };
   retrieval: {
+    engine: "bm25_faiss" | "legacy";
     top_k: number;
     chunk_size: number;
     overlap: number;

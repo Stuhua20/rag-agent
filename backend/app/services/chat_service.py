@@ -16,6 +16,7 @@ from app.services.knowledge_metadata_service import knowledge_metadata_service
 from app.services.llm_service import llm_service
 from app.services.query_understanding_service import query_understanding_service
 from app.services.retrieval_service import retrieval_service
+from app.services.retrieval_index_service import retrieval_index_service
 from app.utils.id_utils import new_id
 from app.utils.time_utils import utc_now_iso
 
@@ -95,6 +96,7 @@ class ChatService:
         _conversation: dict | None = None,
     ) -> dict:
         question = question.strip()
+        retrieval_version = retrieval_index_service.version()
         conversation = _conversation or self.prepare_conversation(conversation_id, question, expected_scope_revision)
         scope = conversation.get("document_scope", {"mode": "all", "document_ids": []})
         filters = {key: value for key, value in (filters or {}).items() if key != "document_ids"}
@@ -150,8 +152,11 @@ class ChatService:
             "query_understanding": self._question_trace(question, query_plan),
             "evidence_gate": evidence_report,
             "answer_verifier": verifier_report,
+            "evidence_review": {"mode": "legacy", "status": "skipped", "passed": None, "reason": "legacy"},
         }
-        self._add_message(conversation["id"], "assistant", answer, sources, quality, scope_context=conversation)
+        with json_store._lock:
+            retrieval_index_service.assert_current(retrieval_version)
+            self._add_message(conversation["id"], "assistant", answer, sources, quality, scope_context=conversation)
         self._touch_conversation(conversation["id"])
 
         return {"conversation_id": conversation["id"], "answer": answer, "sources": sources, "quality": quality}
@@ -166,6 +171,7 @@ class ChatService:
         _conversation: dict | None = None,
     ) -> Generator[dict, None, None]:
         question = question.strip()
+        retrieval_version = retrieval_index_service.version()
         conversation = _conversation or self.prepare_conversation(conversation_id, question, expected_scope_revision)
         scope = conversation.get("document_scope", {"mode": "all", "document_ids": []})
         filters = {key: value for key, value in (filters or {}).items() if key != "document_ids"}
@@ -235,12 +241,15 @@ class ChatService:
             "query_understanding": self._question_trace(question, query_plan),
             "evidence_gate": evidence_report,
             "answer_verifier": verifier_report,
+            "evidence_review": {"mode": "legacy", "status": "skipped", "passed": None, "reason": "legacy"},
         }
         # Streamed text is a draft; done.answer below replaces it with the verified result.
         if not answer_chunks:
             yield {"event": "delta", "data": {"text": answer}}
 
-        self._add_message(conversation["id"], "assistant", answer, sources, quality, scope_context=conversation)
+        with json_store._lock:
+            retrieval_index_service.assert_current(retrieval_version)
+            self._add_message(conversation["id"], "assistant", answer, sources, quality, scope_context=conversation)
         self._touch_conversation(conversation["id"])
 
         yield {
@@ -266,6 +275,7 @@ class ChatService:
             "query_understanding": self._question_trace(question, query_plan),
             "evidence_gate": {"passed": False, "skipped": True, "reason": reason, "source_count": 0},
             "answer_verifier": {"passed": None, "skipped": True, "reason": reason, "issues": []},
+            "evidence_review": {"mode": "legacy", "status": "skipped", "passed": None, "reason": "legacy"},
         }
         self._add_message(conversation["id"], "assistant", answer, [], quality, scope_context=conversation)
         self._touch_conversation(conversation["id"])

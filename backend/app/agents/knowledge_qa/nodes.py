@@ -2,8 +2,10 @@ import json
 
 from langgraph.runtime import Runtime
 
-from app.agents.budget import BudgetExceeded
+from app.agents.budget import BudgetExceeded, RunCancelled
 from app.agents.contracts import Replan, ToolStep
+from app.agents.evidence_review import EvidenceReviewAgent, ReviewInput, ReviewUnavailable
+from app.agents.evidence_review.validation import answer_units
 from app.agents.knowledge_qa.evidence_coverage import assess_coverage, requirements_for
 from app.agents.knowledge_qa.state import KnowledgeQAState
 from app.agents.knowledge_qa.tools import action_key, execute_tool
@@ -19,6 +21,7 @@ LABELS = {
     "understand": "理解问题", "execute": "检索资料", "assess": "检查证据覆盖",
     "replan": "规划补充检索", "generate": "生成回答", "verify": "校验回答",
     "clarify": "需要补充信息", "fallback": "整理依据缺口", "finalize": "保存最终结果",
+    "evidence_review": "审查证据", "repair": "修订回答", "review_fallback": "整理审查结果",
 }
 
 
@@ -26,21 +29,28 @@ def guarded(node):
     def invoke(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
         context = runtime.context
         node_name = node.__name__
-        step_id = f"{node_name}:{state.get('round', 0)}"
-        context.emit("step_started", {"step_id": step_id, "label": LABELS[node_name]})
+        step_id = f"{node_name}:{state.get('round', 0)}:{state.get('revision_round', 0)}"
+        label = "复核回答" if node_name == "evidence_review" and state.get("revision_round") else LABELS[node_name]
+        context.emit("step_started", {"step_id": step_id, "label": label})
         try:
-            context.check(check_budget=node_name in {"understand", "execute", "assess", "replan", "generate", "verify"})
+            context.check(check_budget=node_name not in {"clarify", "fallback", "review_fallback", "finalize"})
             with context.budget.activate():
                 update = node(state, runtime)
         except BudgetExceeded as exc:
-            update = {"halted": True, "stop_reason": str(exc), "status": "insufficient_evidence"}
-        context.emit("step_done", {"step_id": step_id, "label": LABELS[node_name]})
+            real = state.get("review_mode") == "real"
+            update = {"halted": True, "stop_reason": str(exc),
+                      "status": "budget_exceeded" if real else "insufficient_evidence"}
+            if real:
+                update["review_report"] = {"mode": "real", "status": "incomplete", "passed": None, "reason": str(exc)}
+        context.emit("step_done", {"step_id": step_id, "label": label})
         return update
     return invoke
 
 
 def understand(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
     context = runtime.context
+    if state.get("review_mode") == "real":
+        context.budget.reserve_llm(2)  # Generation and its mandatory review survive nested planning calls.
     history = conversation_context_service.build_context(
         context.history, scope_revision=state["scope_revision"],
     )[-8000:]
@@ -174,7 +184,11 @@ def replan(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
 
 def generate(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
     context = runtime.context
-    context.emit("sources", {"conversation_id": state["conversation_id"], "sources": state["sources"]})
+    real = state.get("review_mode") == "real"
+    if real:
+        context.budget.release_llm()
+    else:
+        context.emit("sources", {"conversation_id": state["conversation_id"], "sources": state["sources"]})
     prompt = context.service._build_prompt(
         state["original_question"], state["sources"], state["query_plan"], state["conversation_context"],
         evidence_report=state["evidence_report"],
@@ -184,20 +198,88 @@ def generate(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
         context.budget.check()
         if text:
             chunks.append(text)
-            context.emit("delta", {"text": text})
+            if not real:
+                context.emit("delta", {"text": text})
     answer = "".join(chunks)
-    return {"final_answer": answer}
+    return {"draft_answer": answer} if real else {"final_answer": answer}
 
 
 def verify(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
+    real = state.get("review_mode") == "real"
     verification = answer_quality_service.verify_answer(
-        state["final_answer"], state["resolved_question"], state["sources"],
-        original_question=state["original_question"],
+        state["draft_answer"] if real else state["final_answer"], state["resolved_question"], state["sources"],
+        original_question=state["original_question"], preserve_draft=real,
     )
     answer = verification.pop("answer")
+    if real:
+        update = {"draft_answer": answer, "verifier_report": verification,
+                "rule_history": [*state.get("rule_history", []), {**verification, "revision_round": state["revision_round"]}],
+                "repair_issues": [item["message"] for item in verification["issues"] if item["severity"] == "error"]}
+        if not verification["passed"] and not state.get("review_history"):
+            update["review_report"] = {"mode": "real", "status": "skipped", "passed": None, "reason": "rule_failed"}
+        return update
     return {"final_answer": answer, "verifier_report": verification,
             "status": "answered" if verification["passed"] else "verification_failed",
-            "stop_reason": "completed" if verification["passed"] else "verification_failed"}
+            "stop_reason": "completed" if verification["passed"] else "verification_failed",
+            "review_report": {"mode": state.get("review_mode", "disabled"), "status": "skipped", "passed": None,
+                              "reason": "mock" if state.get("review_mode") == "mock" else "disabled"}}
+
+
+def evidence_review(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
+    context = runtime.context
+    try:
+        request = ReviewInput.model_validate({
+            "original_question": state["original_question"], "resolved_question": state["resolved_question"],
+            "requirements": [{"id": item["id"], "query": item["query"]} for item in state["requirements"]],
+            "answer_units": [item.model_dump() for item in answer_units(state["draft_answer"])],
+            "evidence": [{"id": item["chunk_id"], "text": item["content"], "file_name": item.get("file_name", "")}
+                         for item in state["sources"]],
+            "rule_report": state["verifier_report"], "revision_round": state["revision_round"],
+        })
+        context.budget.release_llm()
+        report = EvidenceReviewAgent().review(request, context.load_prompt)
+    except (ValueError, ReviewUnavailable):
+        report = {"mode": "real", "status": "unavailable", "passed": None, "reason": "review_unavailable",
+                  "revision_round": state["revision_round"]}
+        return {"review_report": report, "review_history": [*state["review_history"], report],
+                "status": "review_unavailable", "stop_reason": "review_unavailable"}
+    issues = [issue for item in report["units"] for issue in item["issues"]]
+    issues.extend(f"任务{item['requirement_id']}：{item['reason']}" for item in report["tasks"]
+                  if item["status"] not in {"answered", "gap_disclosed"})
+    update = {"review_report": report, "review_history": [*state["review_history"], report], "repair_issues": issues}
+    if report["passed"]:
+        update.update(final_answer=state["draft_answer"], status="answered", stop_reason="completed")
+    return update
+
+
+def repair(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
+    context = runtime.context
+    context.budget.reserve_llm(2)
+    context.budget.release_llm()
+    data = {"original_question": state["original_question"], "resolved_question": state["resolved_question"],
+            "draft": state["draft_answer"], "issues": state["repair_issues"],
+            "evidence": [{"id": item["chunk_id"], "text": item["content"]} for item in state["sources"]]}
+    prompt = context.load_prompt("agent/evidence_repair.md").replace("{repair_input}", json.dumps(data, ensure_ascii=False))
+    try:
+        answer = llm_service.generate_answer(prompt, system_prompt=context.load_prompt("system/base.md"))
+    except (BudgetExceeded, RunCancelled):
+        raise
+    except Exception:
+        return {"status": "review_unavailable", "stop_reason": "repair_unavailable",
+                "review_report": {"mode": "real", "status": "unavailable", "passed": None, "reason": "repair_unavailable"}}
+    return {"draft_answer": answer, "revision_round": state["revision_round"] + 1}
+
+
+def review_fallback(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
+    status = state.get("status")
+    if status == "budget_exceeded":
+        answer = "本轮已达到执行预算，未能完成回答核验。请缩小问题范围后重试。"
+    elif status == "review_unavailable":
+        answer = "本轮证据审查未能完成，暂无法提供经过核验的回答。请稍后重试。"
+    else:
+        status = "verification_failed"
+        answer = "当前回答未能通过证据核验，暂无法提供可靠结论。请核对资料或缩小问题范围后重试。"
+    return {"final_answer": answer, "status": status, "stop_reason": state.get("stop_reason") or status}
 
 
 def fallback(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
@@ -222,12 +304,15 @@ def fallback(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
 def complete(state: KnowledgeQAState, runtime: Runtime[RunContext]) -> dict:
     context = runtime.context
     report = state.get("evidence_report", {"passed": False, "skipped": True})
-    if state["status"] != "answered":
+    if state["status"] != "answered" and state.get("review_mode") != "real":
         report = {**report, "passed": False}
     quality = {
         "query_understanding": context.service._question_trace(state["original_question"], state.get("query_plan", {})),
         "evidence_gate": report,
         "answer_verifier": state.get("verifier_report", {"passed": None, "skipped": True}),
+        "evidence_review": {**state.get("review_report", {"mode": "disabled", "status": "skipped", "passed": None}),
+                            "revision_round": state.get("revision_round", 0),
+                            "history": state.get("review_history", []), "rule_history": state.get("rule_history", [])},
         "agent": {"workflow_version": state["workflow_version"], "run_id": state["run_id"],
                   "status": state["status"], "retrieval_rounds": state.get("round", 0),
                   "coverage": state.get("coverage", []), "stop_reason": state["stop_reason"],

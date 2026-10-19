@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { SourceItem } from "../types/chat";
-import { sourceLocation } from "../utils/answerPresentation";
+import { sourceLocation, sourceScoreLabel } from "../utils/answerPresentation";
 import ChatIcon from "./ChatIcon";
 
 type Props = {
@@ -52,7 +52,9 @@ export default function SourceEvidencePanel({ id, sources, selected, onSelect, o
           <pre className="source-evidence-excerpt">{selected.content}</pre>
           <details className="source-evidence-match">
             <summary>匹配信息</summary>
-            <p>{selected.score_type === "exact_match" ? "确定性匹配：全量计算命中" : `检索相似度：${selected.score.toFixed(3)}`}</p>
+            <p>{sourceScoreLabel(selected)}</p>
+            {selected.retrieval_methods?.length ? <p>命中方式：{selected.retrieval_methods.map((method) => method === "bm25" ? "关键词" : "语义").join("、")}</p> : null}
+            {selected.retrieval_warning && <p role="status">{selected.retrieval_warning}</p>}
           </details>
         </section>
         {sources.length > 1 && <nav className="source-evidence-list" aria-label="本回答的证据片段">

@@ -84,3 +84,7 @@ export function fetchChunks(documentId: string, page = 1, pageSize = 50, signal?
 export function deleteDocument(documentId: string) {
   return request<{ deleted: boolean }>(`/api/documents/${documentId}`, { method: "DELETE" });
 }
+
+export function reindexDocument(documentId: string) {
+  return request<UploadResult>(`/api/documents/${documentId}/reindex`, { method: "POST" });
+}

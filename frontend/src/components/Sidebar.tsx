@@ -134,7 +134,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     <aside className="sidebar">
       <div className="sidebar-top">
         <div className="brand-row">
-          <div className="brand">知识库检索工具</div>
+          <div className="brand">知循 · KnowLoop</div>
           <button
             type="button"
             className="sidebar-collapse"

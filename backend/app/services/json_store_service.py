@@ -1,10 +1,15 @@
 import json
+import logging
 import os
 import threading
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 LIST_FILES = {
@@ -41,6 +46,7 @@ DEFAULT_SETTINGS = {
         "mock": True,
     },
     "retrieval": {
+        "engine": "bm25_faiss",
         "top_k": settings.default_top_k,
         "chunk_size": settings.default_chunk_size,
         "overlap": settings.default_overlap,
@@ -73,11 +79,58 @@ class JsonStoreService:
             self.write_json("settings.json", DEFAULT_SETTINGS)
 
     def read_json(self, file_name: str) -> Any:
-        path = self._path(file_name)
-        if not path.exists():
-            return [] if file_name in LIST_FILES else {}
-        with path.open("r", encoding="utf-8") as file:
-            return json.load(file)
+        with self._lock:
+            path = self._path(file_name)
+            if not path.exists():
+                return [] if file_name in LIST_FILES else {}
+            with path.open("r", encoding="utf-8") as file:
+                return json.load(file)
+
+    def write_batch(self, collections: dict[str, Any]) -> None:
+        """Publish a multi-file update under one reader lock; restore on I/O failure.
+
+        This provides single-process consistency, not a crash-safe database transaction.
+        """
+        with self._lock:
+            staged, backups, published = {}, {}, []
+            cleanup_backups = True
+            try:
+                for name, data in collections.items():
+                    path = self._path(name)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    backups[name] = None
+                    if path.exists():
+                        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{name}.", suffix=".backup") as handle:
+                            backup_path = Path(handle.name)
+                        # Preserve the old inode without copying a potentially large vector file.
+                        backup_path.hardlink_to(path)
+                        backups[name] = backup_path
+                    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                                     suffix=".staged", delete=False) as handle:
+                        staged[name] = Path(handle.name)
+                        json.dump(data, handle, ensure_ascii=False, indent=2)
+                        handle.write("\n")
+                for name, staged_path in staged.items():
+                    os.replace(staged_path, self._path(name))
+                    published.append(name)
+            except BaseException:
+                # If restoration itself fails, retain every original inode for recovery.
+                cleanup_backups = False
+                for name in reversed(published):
+                    path = self._path(name)
+                    if backups[name] is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        os.replace(backups[name], path)
+                cleanup_backups = True
+                raise
+            finally:
+                leftovers = [path for path in backups.values() if path is not None] if cleanup_backups else []
+                for path in [*staged.values(), *leftovers]:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        logger.warning("Could not remove a temporary JSON publication file")
 
     def write_json(self, file_name: str, data: Any) -> None:
         path = self._path(file_name)
