@@ -12,6 +12,8 @@ dist/
 
 # Local assistant/tooling settings
 .claude/settings.local.json
+/task_plan.md
+/notes.md
 
 # Cloudflare Tunnel runtime state
 .cloudflare-tunnel/quick.log
